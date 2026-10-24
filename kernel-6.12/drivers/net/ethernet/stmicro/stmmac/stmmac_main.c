@@ -6397,6 +6397,18 @@ static int stmmac_dma_cap_show(struct seq_file *seq, void *v)
 		seq_printf(seq,
 			   "\tNumber of Additional MAC address registers: %d\n",
 			   priv->dma_cap.multi_addr);
+	} else if (priv->plat->has_gmac4) {
+		seq_printf(seq, "\tHash Filter: %s\n",
+			   (priv->dma_cap.hash_filter) ? "Y" : "N");
+		seq_printf(seq,
+			   "\tNumber of MAC address registers (1-31): %d\n",
+			   priv->dma_cap.multi_addr);
+		seq_printf(seq,
+			   "\tAdditional 32 MAC address registers (32-63): %s\n",
+			   priv->dma_cap.additional_32_addr ? "Y" : "N");
+		seq_printf(seq,
+			   "\tAdditional 64 MAC address registers (64-127): %s\n",
+			   priv->dma_cap.additional_64_addr ? "Y" : "N");
 	} else {
 		seq_printf(seq, "\tHash Filter: %s\n",
 			   (priv->dma_cap.hash_filter) ? "Y" : "N");
@@ -7203,6 +7215,29 @@ static int stmmac_hw_init(struct stmmac_priv *priv)
 					(BIT(priv->dma_cap.hash_tb_sz) << 5);
 			priv->hw->mcast_bits_log2 =
 					ilog2(priv->hw->multicast_filter_bins);
+		}
+
+		/*
+		 * The MAC setup callbacks claim IFF_UNICAST_FLT unconditionally,
+		 * and plat->unicast_filter_entries defaults to one whether or not
+		 * the core was synthesized with any additional MAC address
+		 * registers. On a core without them, the filter is programmed to
+		 * a register that does not exist, nothing ever matches, and the
+		 * core skips its own promiscuous fallback because the flag
+		 * promised filtering that cannot happen. Secondary unicast
+		 * addresses - a DSA user port's MAC, a macvlan - are then dropped
+		 * silently. Withdraw the promise so the core falls back instead.
+		 *
+		 * The filter starts at register 1, so only the 1-31 bank counts.
+		 * XGMAC does not report that bank in dma_cap, so leave it alone.
+		 */
+		if (!priv->plat->has_xgmac && priv->plat->has_gmac4) {
+			if (!priv->dma_cap.multi_addr) {
+				priv->hw->unicast_filter_entries = 0;
+				priv->dev->priv_flags &= ~IFF_UNICAST_FLT;
+			} else {
+				priv->hw->unicast_filter_entries = priv->dma_cap.multi_addr;
+			}
 		}
 
 		/* TXCOE doesn't work in thresh DMA mode */
@@ -8032,16 +8067,6 @@ int stmmac_resume(struct device *dev)
 	}
 
 	rtnl_lock();
-	if (device_may_wakeup(priv->device) && priv->plat->pmt) {
-		phylink_resume(priv->phylink);
-	} else {
-		phylink_resume(priv->phylink);
-		if (device_may_wakeup(priv->device))
-			phylink_speed_up(priv->phylink);
-	}
-	rtnl_unlock();
-
-	rtnl_lock();
 	mutex_lock(&priv->lock);
 
 	stmmac_reset_queues_param(priv);
@@ -8066,6 +8091,19 @@ int stmmac_resume(struct device *dev)
 	stmmac_enable_all_dma_irq(priv);
 
 	mutex_unlock(&priv->lock);
+
+	/*
+	 * phylink_resume() can bring the link up from a workqueue as soon as
+	 * it runs, so the MAC has to be programmed first.
+	 */
+	if (device_may_wakeup(priv->device) && priv->plat->pmt) {
+		phylink_resume(priv->phylink);
+	} else {
+		phylink_resume(priv->phylink);
+		if (device_may_wakeup(priv->device))
+			phylink_speed_up(priv->phylink);
+	}
+
 	rtnl_unlock();
 
 	netif_device_attach(ndev);
