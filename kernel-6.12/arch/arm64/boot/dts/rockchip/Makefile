@@ -627,5 +627,14 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-roc-pc.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-rock-5a.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-rock-5c.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-youyeetoo-r1.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-lubancat-3.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-lubancat-3io.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-lubancat-generic.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-lubancat-5.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-lubancat-5-v2.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-lubancat-5io.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-lubancat-generic.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-lubancat-4-v1.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-lubancat-4io.dtb
 
 subdir-y += overlay
