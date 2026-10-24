@@ -409,6 +409,10 @@
 	status = "okay";
 };
 
+&power {
+	gpu-supply = <&vdd_gpu_s0>;
+};
+
 &dfi {
 	status = "okay";
 };

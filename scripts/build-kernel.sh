@@ -19,7 +19,7 @@ cd linux-rockchip
 
 # Compile kernel into a deb package
 make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 rockchip_linux_defconfig
-make KBUILD_IMAGE="arch/arm64/boot/Image" CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 -j"$(nproc)" bindeb-pkg
+make KBUILD_IMAGE="arch/arm64/boot/Image" CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 -j"$(nproc)" DPKG_FLAGS=-d bindeb-pkg
 
 # Cleanup garbage
 rm -f ../linux-image-*dbg*.deb ../linux-libc-dev_*.deb ../*.buildinfo ../*.changes ../*.dsc ../*.tar.gz
