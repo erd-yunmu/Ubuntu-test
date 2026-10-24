@@ -269,6 +269,17 @@ struct rockchip_sfc {
 	struct rockchip_sfc_data *data;
 };
 
+static inline bool is_invalid_id(const u8 *id)
+{
+	return ((0xFF == id[0] && 0xFF == id[1]) ||
+		(0x00 == id[0] && 0x00 == id[1]));
+}
+
+static bool rockchip_sfc_clk_is_direct(struct rockchip_sfc *sfc)
+{
+	return (sfc->version >= SFC_VER_4 && sfc->version < SFC_VER_8) || sfc->sclk_x2_bypass;
+}
+
 static int rockchip_sfc_reset(struct rockchip_sfc *sfc)
 {
 	int err;
@@ -332,7 +343,7 @@ static void rockchip_sfc_set_delay_lines(struct rockchip_sfc *sfc, u16 cells, u8
 
 static int rockchip_sfc_clk_set_rate(struct rockchip_sfc *sfc, unsigned long  speed)
 {
-	if (sfc->version < SFC_VER_8 || sfc->sclk_x2_bypass)
+	if (rockchip_sfc_clk_is_direct(sfc))
 		return clk_set_rate(sfc->clk, speed);
 	else
 		return clk_set_rate(sfc->clk, speed * 2);
@@ -340,7 +351,7 @@ static int rockchip_sfc_clk_set_rate(struct rockchip_sfc *sfc, unsigned long  sp
 
 static unsigned long rockchip_sfc_clk_get_rate(struct rockchip_sfc *sfc)
 {
-	if (sfc->version < SFC_VER_8 || sfc->sclk_x2_bypass)
+	if (rockchip_sfc_clk_is_direct(sfc))
 		return clk_get_rate(sfc->clk);
 	else
 		return clk_get_rate(sfc->clk) / 2;
@@ -755,10 +766,17 @@ static int rockchip_sfc_tuning_read_id(struct rockchip_sfc *sfc, struct spi_mem 
 	ret = rockchip_sfc_tuning_exec_op_bypass(sfc, mem, &op);
 	if (ret)
 		return ret;
-
-	if ((0xFF == buf[0] && 0xFF == buf[1]) ||
-	    (0x00 == buf[0] && 0x00 == buf[1]))
-		return -ENODEV;
+	if (is_invalid_id(buf)) {
+		/* Some SPI Nands only support access via addr 0. */
+		op.addr.nbytes = 1;
+		op.addr.val = 0;
+		op.addr.buswidth = 1;
+		ret = rockchip_sfc_tuning_exec_op_bypass(sfc, mem, &op);
+		if (ret)
+			return ret;
+		if (is_invalid_id(buf))
+			return -ENODEV;
+	}
 
 	return 0;
 }
@@ -824,6 +842,8 @@ static int rockchip_sfc_tuning_prepared(struct rockchip_sfc *sfc, struct spi_mem
 		if (sfc->tuning_stage[cs] == SFC_TUNING_STAGE_SDR_HS)
 			return -EINVAL;
 
+		sfc->shift_phase = true;
+		rockchip_sfc_set_delay_lines(sfc, 0, cs);
 		rockchip_sfc_clk_set_rate(sfc, SFC_DLL_THRESHOLD_RATE);
 		if (rockchip_sfc_tuning_read_id(sfc, mem, sfc->tune_pattern,
 						SFC_TUNING_ITEM_SIZE)) {

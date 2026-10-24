@@ -54,6 +54,8 @@
 #include "rockchip_drm_vop.h"
 #include "rockchip_rgb.h"
 
+#define VOP_READ_POLL_DELAY_US		10
+
 #define VOP_REG_SUPPORT(vop, reg) \
 		(reg.mask && \
 		 (!reg.major || \
@@ -1234,7 +1236,7 @@ static void vop_disable_all_planes(struct vop *vop)
 	vop_cfg_done(vop);
 	ret = readx_poll_timeout_atomic(vop_is_allwin_disabled,
 					vop, active, active,
-					0, 500 * 1000);
+					VOP_READ_POLL_DELAY_US, 500 * 1000);
 	if (ret)
 		dev_err(vop->dev, "wait win close timeout\n");
 }
@@ -1746,7 +1748,7 @@ static int vop_wb_encoder_atomic_check(struct drm_encoder *encoder,
 	rk_obj = to_rockchip_obj(obj);
 	wb_state->yrgb_addr = rk_obj->dma_addr + fb->offsets[0];
 
-	if (fb->format->is_yuv) {
+	if (rockchip_drm_format_info_has_uv_plane(fb->format)) {
 		uv_obj = fb->obj[1];
 		rk_uv_obj = to_rockchip_obj(uv_obj);
 
@@ -2450,7 +2452,7 @@ static int vop_plane_atomic_check(struct drm_plane *plane,
 	obj = fb->obj[0];
 	rk_obj = to_rockchip_obj(obj);
 	vop_plane_state->yrgb_mst = rk_obj->dma_addr + offset + fb->offsets[0];
-	if (fb->format->is_yuv) {
+	if (rockchip_drm_format_info_has_uv_plane(fb->format)) {
 		int hsub = fb->format->hsub;
 		int vsub = fb->format->vsub;
 
@@ -2671,8 +2673,10 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 		    (new_state->rotation & DRM_MODE_REFLECT_X) ? 1 : 0);
 
 	if (is_yuv) {
-		VOP_WIN_SET(vop, win, uv_vir, DIV_ROUND_UP(fb->pitches[1], 4));
-		VOP_WIN_SET(vop, win, uv_mst, vop_plane_state->uv_mst);
+		if (fb->format->num_planes > 1) {
+			VOP_WIN_SET(vop, win, uv_vir, DIV_ROUND_UP(fb->pitches[1], 4));
+			VOP_WIN_SET(vop, win, uv_mst, vop_plane_state->uv_mst);
+		}
 		uv_swap = has_uv_swapped(fb->format->format);
 		VOP_WIN_SET(vop, win, uv_swap, uv_swap);
 	}
@@ -3274,9 +3278,12 @@ static int vop_crtc_debugfs_dump(struct drm_crtc *crtc, struct seq_file *s)
 	struct vop *vop = to_vop(crtc);
 	struct drm_crtc_state *crtc_state = crtc->state;
 	struct drm_display_mode *mode = &crtc->state->adjusted_mode;
+	struct drm_display_mode tmp;
 	struct rockchip_crtc_state *state = to_rockchip_crtc_state(crtc->state);
 	bool interlaced = !!(mode->flags & DRM_MODE_FLAG_INTERLACE);
 	struct drm_plane *plane;
+	u64 dividend, dclk_rate_kHz;
+	u32 actual_fps_x100;
 	int i;
 
 	DEBUG_PRINT("VOP [%s]: %s\n", dev_name(vop->dev),
@@ -3285,6 +3292,19 @@ static int vop_crtc_debugfs_dump(struct drm_crtc *crtc, struct seq_file *s)
 	if (!crtc_state->active)
 		return 0;
 
+	drm_mode_copy(&tmp, mode);
+	/* Use crtc timing to calculate actual refresh rate */
+	tmp.clock = tmp.crtc_clock / DIV_ROUND_CLOSEST(tmp.crtc_clock, tmp.clock);
+	tmp.htotal = tmp.crtc_htotal;
+	tmp.vtotal = tmp.crtc_vtotal;
+	/* Calculate refresh rate multiplied by 100 to keep two decimal precision */
+	tmp.clock *= 100;
+	/* Convert VOP dclk from Hz to kHz for DRM mode */
+	dclk_rate_kHz = clk_get_rate(vop->dclk) / 1000;
+
+	dividend = mul_u32_u32(drm_mode_vrefresh(&tmp), dclk_rate_kHz);
+	actual_fps_x100 = div64_u64(dividend, mode->crtc_clock);
+
 	vop_dump_connector_on_crtc(crtc, s);
 	DEBUG_PRINT("\tbus_format[%x]: %s\n", state->bus_format,
 		    drm_get_bus_format_name(state->bus_format));
@@ -3292,12 +3312,12 @@ static int vop_crtc_debugfs_dump(struct drm_crtc *crtc, struct seq_file *s)
 		    state->yuv_overlay, state->output_mode);
 	DEBUG_PRINT("color-encoding[%d] color-range[%d]\n",
 		    state->color_encoding, state->color_range);
-	DEBUG_PRINT("    Display mode: %dx%d%s%d\n",
+	DEBUG_PRINT("    Display mode: %dx%d%s%u.%02u\n",
 		    mode->hdisplay, mode->vdisplay, interlaced ? "i" : "p",
-		    drm_mode_vrefresh(mode));
-	DEBUG_PRINT("\tdclk[%d kHz] real_dclk[%d kHz] aclk[%ld kHz] type[%x] flag[%x]\n",
-		    mode->clock, mode->crtc_clock, clk_get_rate(vop->aclk) / 1000,
-		    mode->type, mode->flags);
+		    actual_fps_x100 / 100, actual_fps_x100 % 100);
+	DEBUG_PRINT("\tdclk[%d kHz] crtc_dclk[%d kHz] real_dclk[%lu kHz] aclk[%ld kHz] type[%x] flag[%x]\n",
+		    mode->clock, mode->crtc_clock, clk_get_rate(vop->dclk) / 1000,
+		    clk_get_rate(vop->aclk) / 1000, mode->type, mode->flags);
 	DEBUG_PRINT("\tH: %d %d %d %d\n", mode->hdisplay, mode->hsync_start,
 		    mode->hsync_end, mode->htotal);
 	DEBUG_PRINT("\tV: %d %d %d %d\n", mode->vdisplay, mode->vsync_start,
@@ -4141,7 +4161,7 @@ static void vop_wait_for_fs_by_done_bit_status(struct vop *vop, u32 vrefresh)
 	int ret;
 
 	ret = readx_poll_timeout_atomic(vop_done_bit_status, vop, done_bit,
-					done_bit, 0, timeout_us * 3 / 2);
+					done_bit, VOP_READ_POLL_DELAY_US, timeout_us * 3 / 2);
 	if (ret)
 		DRM_DEV_ERROR(vop->dev, "wait done bit status timeout\n");
 }
@@ -4207,6 +4227,8 @@ static void vop_crtc_atomic_enable(struct drm_crtc *crtc,
 		else if (s->output_if & VOP_OUTPUT_IF_BT656)
 			VOP_CTRL_SET(vop, bt656_data_map_mode, s->data_map_mode);
 		else if (vop->mcu_timing.mcu_pix_total)
+			VOP_CTRL_SET(vop, mcu_data_map_mode, s->data_map_mode);
+		else if (s->output_if & VOP_OUTPUT_IF_RGB)
 			VOP_CTRL_SET(vop, mcu_data_map_mode, s->data_map_mode);
 	}
 
@@ -4995,7 +5017,7 @@ static void vop_wait_for_irq_handler(struct vop *vop)
 	 * shouldn't exceed microseconds range.
 	 */
 	ret = readx_poll_timeout_atomic(vop_fs_irq_is_pending, vop, pending,
-					!pending, 0, 10 * 1000);
+					!pending, VOP_READ_POLL_DELAY_US, 10 * 1000);
 	if (ret)
 		DRM_DEV_ERROR(vop->dev, "VOP vblank IRQ stuck for 10 ms\n");
 
@@ -5487,6 +5509,7 @@ static irqreturn_t vop_isr(int irq, void *data)
 		if (active_irqs & VOPL_WB_COMPLETE_INTR) {
 			active_irqs &= ~VOPL_WB_COMPLETE_INTR;
 			vop_wb_complete(vop);
+			ret = IRQ_HANDLED;
 		}
 		if (active_irqs)
 			DRM_ERROR("Unknown writeback IRQs: %02x\n", active_irqs);

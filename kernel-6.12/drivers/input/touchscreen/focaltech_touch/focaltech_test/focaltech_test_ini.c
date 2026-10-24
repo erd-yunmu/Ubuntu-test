@@ -196,6 +196,7 @@ static int fts_test_read_ini_data(char *config_name, char *config_buf)
     off_t fsize = 0;
     char filepath[128];
     loff_t pos = 0;
+    mm_segment_t old_fs;
 
     FTS_TEST_FUNC_ENTER();
 
@@ -216,9 +217,12 @@ static int fts_test_read_ini_data(char *config_name, char *config_buf)
     inode = pfile->f_dentry->d_inode;
 #endif
     fsize = inode->i_size;
+    old_fs = get_fs();
+    set_fs(KERNEL_DS);
     pos = 0;
-    kernel_read(pfile, config_buf, fsize, &pos);
+    vfs_read(pfile, config_buf, fsize, &pos);
     filp_close(pfile, NULL);
+    set_fs(old_fs);
 
     FTS_TEST_FUNC_EXIT();
     return 0;

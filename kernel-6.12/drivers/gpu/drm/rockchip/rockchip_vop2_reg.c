@@ -31,6 +31,8 @@
 		_VOP_REG(off, _mask, s, true)
 
 static const uint32_t formats_for_cluster[] = {
+	DRM_FORMAT_XRGB2101010,
+	DRM_FORMAT_XBGR2101010,
 	DRM_FORMAT_XRGB8888,
 	DRM_FORMAT_ARGB8888,
 	DRM_FORMAT_XBGR8888,
@@ -237,9 +239,16 @@ static const uint32_t formats_for_cursor[] = {
 	DRM_FORMAT_XBGR1555,
 };
 
-static const u32 formats_wb[] = {
-	DRM_FORMAT_BGR888,
+static const u32 rk3568_vop_wb_formats[] = {
 	DRM_FORMAT_ARGB8888,
+	DRM_FORMAT_BGR888,
+	DRM_FORMAT_RGB565,
+	DRM_FORMAT_NV12,
+};
+
+static const u32 rk3588_vop_wb_formats[] = {
+	DRM_FORMAT_ARGB8888,
+	DRM_FORMAT_RGB888,
 	DRM_FORMAT_RGB565,
 	DRM_FORMAT_NV12,
 };
@@ -1170,8 +1179,8 @@ static const struct vop2_wb_regs rk3568_vop_wb_regs = {
 };
 
 static const struct vop2_wb_data rk3568_vop_wb_data = {
-	.formats = formats_wb,
-	.nformats = ARRAY_SIZE(formats_wb),
+	.formats = rk3568_vop_wb_formats,
+	.nformats = ARRAY_SIZE(rk3568_vop_wb_formats),
 	.max_output = { 1920, 1080 },
 	.fifo_depth =  1920 * 4 / 16,
 	.regs = &rk3568_vop_wb_regs,
@@ -1210,12 +1219,14 @@ static const struct vop2_wb_regs rk3572_vop_wb_regs = {
 };
 
 static const struct vop2_wb_data rk3572_vop_wb_data = {
-	.formats = formats_wb,
-	.nformats = ARRAY_SIZE(formats_wb),
+	.formats = rk3588_vop_wb_formats,
+	.nformats = ARRAY_SIZE(rk3588_vop_wb_formats),
 	.max_output = { 1920, 1080 },
 	.fifo_depth =  1920 * 4 / 16,
 	.num_plane_source = ARRAY_SIZE(rk3572_wb_plane_source),
 	.plane_source = rk3572_wb_plane_source,
+	.csc_coe_offset = RK3572_WB_CSC_COE01_00,
+	.csc_pixel_depth = 8,
 	.regs = &rk3572_vop_wb_regs,
 };
 
@@ -1242,11 +1253,19 @@ static const struct vop2_wb_regs rk3576_vop_wb_regs = {
 };
 
 static const struct vop2_wb_data rk3576_vop_wb_data = {
-	.formats = formats_wb,
-	.nformats = ARRAY_SIZE(formats_wb),
+	.formats = rk3588_vop_wb_formats,
+	.nformats = ARRAY_SIZE(rk3588_vop_wb_formats),
 	.max_output = { 1920, 1080 },
 	.fifo_depth =  1920 * 4 / 16,
 	.regs = &rk3576_vop_wb_regs,
+};
+
+static const struct vop2_wb_data rk3588_vop_wb_data = {
+	.formats = rk3588_vop_wb_formats,
+	.nformats = ARRAY_SIZE(rk3588_vop_wb_formats),
+	.max_output = { 1920, 1080 },
+	.fifo_depth =  1920 * 4 / 16,
+	.regs = &rk3568_vop_wb_regs,
 };
 
 static const struct vop2_video_port_regs rk3528_vop_vp0_regs = {
@@ -1501,7 +1520,6 @@ static const struct vop2_video_port_data rk3528_vop_video_ports[] = {
 	 .layer_mix_dly = 6,
 	 .hdr_mix_dly = 2,
 	 .win_dly = 8,
-	 .reg_done_bit = 4,
 	 .intr = &rk3568_vp0_intr,
 	 .regs = &rk3528_vop_vp0_regs,
 	 .ovl_regs = &rk3528_vop_vp0_ovl_regs,
@@ -1517,7 +1535,6 @@ static const struct vop2_video_port_data rk3528_vop_video_ports[] = {
 	 .layer_mix_dly = 2,
 	 .hdr_mix_dly = 0,
 	 .win_dly = 8,
-	 .reg_done_bit = 5,
 	 .intr = &rk3568_vp1_intr,
 	 .regs = &rk3528_vop_vp1_regs,
 	 .ovl_regs = &rk3528_vop_vp1_ovl_regs,
@@ -1568,10 +1585,6 @@ static const struct vop2_video_port_regs rk3538_vop_vp0_regs = {
 	.vpost_st_end_f1 = VOP_REG(RK3568_VP0_POST_DSP_VACT_INFO_F1, 0x1fff1fff, 0),
 	.lut_dma_rid = VOP_REG(RK3568_SYS_AXI_LUT_CTRL, 0xf, 4),
 	.layer_sel = VOP_REG(RK3528_OVL_PORT0_LAYER_SEL, 0xffff, 0),
-	.hdr_src_color_ctrl = VOP_REG(RK3528_HDR_SRC_COLOR_CTRL, 0xffffffff, 0),
-	.hdr_dst_color_ctrl = VOP_REG(RK3528_HDR_DST_COLOR_CTRL, 0xffffffff, 0),
-	.hdr_src_alpha_ctrl = VOP_REG(RK3528_HDR_SRC_ALPHA_CTRL, 0xffffffff, 0),
-	.hdr_dst_alpha_ctrl = VOP_REG(RK3528_HDR_DST_ALPHA_CTRL, 0xffffffff, 0),
 	.hdr_lut_update_en = VOP_REG(RK3568_HDR_LUT_CTRL, 0x1, 0),
 	.hdr_lut_mode = VOP_REG(RK3568_HDR_LUT_CTRL, 0x1, 1),
 	.hdr_lut_mst = VOP_REG(RK3568_HDR_LUT_MST, 0xffffffff, 0),
@@ -1677,7 +1690,6 @@ static const struct vop2_video_port_data rk3538_vop_video_ports[] = {
 	 .cgc_dly = 18,
 	 .pixel_rate = 1,
 	 .hdr_cgc_layer_num = 2,
-	 .reg_done_bit = 4,
 	 .intr = &rk3572_vp0_intr,
 	 .urgency = &rk3538_vp0_urgency,
 	 .regs = &rk3538_vop_vp0_regs,
@@ -1770,7 +1782,6 @@ static const struct vop2_video_port_data rk3562_vop_video_ports[] = {
 	 .max_output = { 2048, 4096 },
 	 .win_dly = 6,
 	 .layer_mix_dly = 8,
-	 .reg_done_bit = 4,
 	 .intr = &rk3568_vp0_intr,
 	 .regs = &rk3562_vop_vp0_regs,
 	 .ovl_regs = &rk3528_vop_vp0_ovl_regs,
@@ -1989,7 +2000,6 @@ static const struct vop2_video_port_data rk3568_vop_video_ports[] = {
 	 .dclk_max = 600000000,
 	 .max_output = { 4096, 4096 },
 	 .pre_scan_max_dly = { 69, 53, 53, 42 },
-	 .reg_done_bit = 4,
 	 .intr = &rk3568_vp0_intr,
 	 .hdr_table = &rk3568_vop_hdr_table,
 	 .regs = &rk3568_vop_vp0_regs,
@@ -2002,7 +2012,6 @@ static const struct vop2_video_port_data rk3568_vop_video_ports[] = {
 	 .dclk_max = 200000000,
 	 .max_output = { 2048, 2048 },
 	 .pre_scan_max_dly = { 40, 40, 40, 40 },
-	 .reg_done_bit = 5,
 	 .intr = &rk3568_vp1_intr,
 	 .regs = &rk3568_vop_vp1_regs,
 	},
@@ -2014,7 +2023,6 @@ static const struct vop2_video_port_data rk3568_vop_video_ports[] = {
 	 .dclk_max = 150000000,
 	 .max_output = { 1920, 1920 },
 	 .pre_scan_max_dly = { 40, 40, 40, 40 },
-	 .reg_done_bit = 6,
 	 .intr = &rk3568_vp2_intr,
 	 .regs = &rk3568_vop_vp2_regs,
 	},
@@ -2072,10 +2080,6 @@ static const struct vop2_video_port_regs rk3572_vop_vp0_regs = {
 	.vpost_st_end_f1 = VOP_REG(RK3568_VP0_POST_DSP_VACT_INFO_F1, 0x1fff1fff, 0),
 	.lut_dma_rid = VOP_REG(RK3568_SYS_AXI_LUT_CTRL, 0xf, 4),
 	.layer_sel = VOP_REG(RK3528_OVL_PORT0_LAYER_SEL, 0xffff, 0),
-	.hdr_src_color_ctrl = VOP_REG(RK3528_HDR_SRC_COLOR_CTRL, 0xffffffff, 0),
-	.hdr_dst_color_ctrl = VOP_REG(RK3528_HDR_DST_COLOR_CTRL, 0xffffffff, 0),
-	.hdr_src_alpha_ctrl = VOP_REG(RK3528_HDR_SRC_ALPHA_CTRL, 0xffffffff, 0),
-	.hdr_dst_alpha_ctrl = VOP_REG(RK3528_HDR_DST_ALPHA_CTRL, 0xffffffff, 0),
 	.hdr_lut_update_en = VOP_REG(RK3568_HDR_LUT_CTRL, 0x1, 0),
 	.hdr_lut_mode = VOP_REG(RK3568_HDR_LUT_CTRL, 0x1, 1),
 	.hdr_lut_mst = VOP_REG(RK3568_HDR_LUT_MST, 0xffffffff, 0),
@@ -2246,11 +2250,6 @@ static const struct vop2_video_port_regs rk3572_vop_vp1_regs = {
 
 	.line_flag_or_en = VOP_REG(RK3588_SYS_VAR_FREQ_CTRL, 0x1, 21),
 	.almost_full_or_en = VOP_REG(RK3588_SYS_VAR_FREQ_CTRL, 0x1, 29),
-	.axi0_port_urgency_en = VOP_REG(RK3576_SYS_AXI_HURRY_CTRL0_IMD, 0x1, 25),
-	.axi1_port_urgency_en = VOP_REG(RK3576_SYS_AXI_HURRY_CTRL1_IMD, 0x1, 25),
-	.post_urgency_en = VOP_REG(RK3568_VP1_COLOR_BAR_CTRL, 0x1, 8),
-	.post_urgency_thl = VOP_REG(RK3568_VP1_COLOR_BAR_CTRL, 0xf, 16),
-	.post_urgency_thh = VOP_REG(RK3568_VP1_COLOR_BAR_CTRL, 0xf, 20),
 
 	.calc_dclk_cnt = VOP_REG(RK3576_VP1_POST_CLK_CNT, 0x7fff, 0),
 	.calc_aclk_cnt = VOP_REG(RK3576_VP1_POST_CLK_CNT, 0xffff, 16),
@@ -2295,7 +2294,6 @@ static const struct vop2_video_port_data rk3572_vop_video_ports[] = {
 	 .win_dly = 10,
 	 .cursor_dly = 13, /* win_dly[10] - cursor_win_dly[5] + 4 * mix_dly[2] */
 	 .pixel_rate = 1,
-	 .reg_done_bit = 4,
 	 .intr = &rk3572_vp0_intr,
 	 .urgency = &rk3572_vp0_urgency,
 	 .regs = &rk3572_vop_vp0_regs,
@@ -2321,7 +2319,6 @@ static const struct vop2_video_port_data rk3572_vop_video_ports[] = {
 	 .bcsh_r2y_csc_coe_offset = RK3572_VP1_BCSH_R2Y_COE00,
 	 .bcsh_y2r_csc_coe_offset = RK3572_VP1_BCSH_Y2R_COE00,
 	 .csc_coe_bits = 10,
-	 .reg_done_bit = 5,
 	 .intr = &rk3572_vp1_intr,
 	 .regs = &rk3572_vop_vp1_regs,
 	 .ovl_regs = &rk3572_vop_vp1_ovl_regs,
@@ -2377,10 +2374,6 @@ static const struct vop2_video_port_regs rk3576_vop_vp0_regs = {
 	.vpost_st_end_f1 = VOP_REG(RK3568_VP0_POST_DSP_VACT_INFO_F1, 0x1fff1fff, 0),
 	.lut_dma_rid = VOP_REG(RK3568_SYS_AXI_LUT_CTRL, 0xf, 4),
 	.layer_sel = VOP_REG(RK3528_OVL_PORT0_LAYER_SEL, 0xffff, 0),
-	.hdr_src_color_ctrl = VOP_REG(RK3528_HDR_SRC_COLOR_CTRL, 0xffffffff, 0),
-	.hdr_dst_color_ctrl = VOP_REG(RK3528_HDR_DST_COLOR_CTRL, 0xffffffff, 0),
-	.hdr_src_alpha_ctrl = VOP_REG(RK3528_HDR_SRC_ALPHA_CTRL, 0xffffffff, 0),
-	.hdr_dst_alpha_ctrl = VOP_REG(RK3528_HDR_DST_ALPHA_CTRL, 0xffffffff, 0),
 	.hdr_lut_update_en = VOP_REG(RK3568_HDR_LUT_CTRL, 0x1, 0),
 	.hdr_lut_mode = VOP_REG(RK3568_HDR_LUT_CTRL, 0x1, 1),
 	.hdr_lut_mst = VOP_REG(RK3568_HDR_LUT_MST, 0xffffffff, 0),
@@ -2668,7 +2661,6 @@ static const struct vop2_video_port_data rk3576_vop_video_ports[] = {
 	 .hdr_mix_dly = 2,
 	 .win_dly = 10,
 	 .pixel_rate = 2,
-	 .reg_done_bit = 4,
 	 .intr = &rk3568_vp0_intr,
 	 .urgency = &rk3576_vp0_urgency,
 	 .regs = &rk3576_vop_vp0_regs,
@@ -2689,7 +2681,6 @@ static const struct vop2_video_port_data rk3576_vop_video_ports[] = {
 	 .hdr_mix_dly = 0,
 	 .win_dly = 10,
 	 .pixel_rate = 1,
-	 .reg_done_bit = 5,
 	 .intr = &rk3568_vp1_intr,
 	 .regs = &rk3576_vop_vp1_regs,
 	 .ovl_regs = &rk3528_vop_vp1_ovl_regs,
@@ -2708,7 +2699,6 @@ static const struct vop2_video_port_data rk3576_vop_video_ports[] = {
 	 .hdr_mix_dly = 0,
 	 .win_dly = 10,
 	 .pixel_rate = 1,
-	 .reg_done_bit = 6,
 	 .intr = &rk3568_vp2_intr,
 	 .regs = &rk3576_vop_vp2_regs,
 	 .ovl_regs = &rk3576_vop_vp2_ovl_regs,
@@ -3056,7 +3046,6 @@ static const struct vop2_video_port_data rk3588_vop_video_ports[] = {
 	 .max_output = { 7680, 4320 },
 	 /* hdr2sdr sdr2hdr hdr2hdr sdr2sdr */
 	 .pre_scan_max_dly = { 76, 65, 65, 54 },
-	 .reg_done_bit = 4,
 	 .intr = &rk3568_vp0_intr,
 	 .hdr_table = &rk3568_vop_hdr_table,
 	 .regs = &rk3588_vop_vp0_regs,
@@ -3071,7 +3060,6 @@ static const struct vop2_video_port_data rk3588_vop_video_ports[] = {
 	 .dclk_max = 600000000,
 	 .max_output = { 4096, 2304 },
 	 .pre_scan_max_dly = { 76, 65, 65, 54 },
-	 .reg_done_bit = 5,
 	 .intr = &rk3568_vp1_intr,
 	 /* vp1 share the same hdr curve with vp0 */
 	 .hdr_table = &rk3568_vop_hdr_table,
@@ -3088,7 +3076,6 @@ static const struct vop2_video_port_data rk3588_vop_video_ports[] = {
 	 .dclk_max = 600000000,
 	 .max_output = { 4096, 2304 },
 	 .pre_scan_max_dly = { 52, 52, 52, 52 },
-	 .reg_done_bit = 6,
 	 .intr = &rk3568_vp2_intr,
 	 .regs = &rk3588_vop_vp2_regs,
 	},
@@ -3100,7 +3087,6 @@ static const struct vop2_video_port_data rk3588_vop_video_ports[] = {
 	 .dclk_max = 200000000,
 	 .max_output = { 2048, 1536 },
 	 .pre_scan_max_dly = { 52, 52, 52, 52 },
-	 .reg_done_bit = 7,
 	 .intr = &rk3588_vp3_intr,
 	 .regs = &rk3588_vop_vp3_regs,
 	},
@@ -5452,6 +5438,7 @@ static const struct vop2_win_data rk3572_vop_win_data[] = {
 	  .max_downscale_factor = 8,
 	  .max_grids = 64,
 	  .max_grids_per_row = 8,
+	  .min_grids = 2,
 	  .feature = WIN_FEATURE_MSMART | WIN_FEATURE_CGC,
 	},
 
@@ -5486,6 +5473,7 @@ static const struct vop2_win_data rk3572_vop_win_data[] = {
 	  .max_downscale_factor = 8,
 	  .max_grids = 36,
 	  .max_grids_per_row = 6,
+	  .min_grids = 2,
 	  .feature = WIN_FEATURE_MSMART | WIN_FEATURE_CGC,
 	},
 };
@@ -6418,7 +6406,6 @@ static const struct vop2_win_data rk3588_vop_win_data[] = {
 static const struct vop2_ctrl rk3528_vop_ctrl = {
 	.cfg_done_en = VOP_REG_MASK(RK3568_REG_CFG_DONE, 0x1, 15),
 	.wb_cfg_done = VOP_REG_MASK(RK3568_REG_CFG_DONE, 0x1, 14),
-	.win_cfg_done = VOP_REG_MASK(RK3588_SYS_WIN_REG_CFG_DONE, 0xffffffff, 0),
 	.auto_gating_en = VOP_REG(RK3568_SYS_AUTO_GATING_CTRL, 0x1, 31),
 	.aclk_pre_auto_gating_en = VOP_REG(RK3568_SYS_AUTO_GATING_CTRL, 0x1, 7),
 	.if_ctrl_cfg_done_imd = VOP_REG(RK3568_DSP_IF_POL, 0x1, 28),
@@ -6457,7 +6444,7 @@ static const struct vop2_ctrl rk3538_vop_ctrl = {
 	.dsp_vs_t_sel = VOP_REG_MASK(RK3576_SYS_PORT_CTRL_IMD, 0x1, 4),
 	.auto_cs_en = VOP_REG_MASK(RK3576_SYS_PORT_CTRL_IMD, 0x1, 5),
 	.auto_cs_mode = VOP_REG_MASK(RK3576_SYS_PORT_CTRL_IMD, 0x1, 15),
-	.fbc_timeout_en = VOP_REG_MASK(RK3572_FBC_TIMEOUT_CTRL, 0x1, 31),
+	.fbc_timeout_en = VOP_REG(RK3572_FBC_TIMEOUT_CTRL, 0x1, 31),
 
 	.rkmmu_v2_en = VOP_REG_MASK(RK3572_SYS0_AXI0_MMU_CTRL, 0x1, 1),
 	.mmu0_qos_en = VOP_REG_MASK(RK3572_SYS0_AXI0_MMU_CTRL2_IMD, 0x1, 0),
@@ -6524,7 +6511,6 @@ static const struct vop_grf_ctrl rk3562_sys_grf_ctrl = {
 static const struct vop2_ctrl rk3562_vop_ctrl = {
 	.cfg_done_en = VOP_REG(RK3568_REG_CFG_DONE, 0x1, 15),
 	.wb_cfg_done = VOP_REG_MASK(RK3568_REG_CFG_DONE, 0x1, 14),
-	.win_cfg_done = VOP_REG_MASK(RK3588_SYS_WIN_REG_CFG_DONE, 0xffffffff, 0),
 	.auto_gating_en = VOP_REG(RK3568_SYS_AUTO_GATING_CTRL, 0x1, 31),
 	.aclk_pre_auto_gating_en = VOP_REG(RK3568_SYS_AUTO_GATING_CTRL, 0x1, 7),
 	.if_ctrl_cfg_done_imd = VOP_REG(RK3568_DSP_IF_POL, 0x1, 28),
@@ -6642,7 +6628,7 @@ static const struct vop2_ctrl rk3572_vop_ctrl = {
 	.dsp_vs_t_sel = VOP_REG_MASK(RK3576_SYS_PORT_CTRL_IMD, 0x1, 4),
 	.auto_cs_en = VOP_REG_MASK(RK3576_SYS_PORT_CTRL_IMD, 0x1, 5),
 	.auto_cs_mode = VOP_REG_MASK(RK3576_SYS_PORT_CTRL_IMD, 0x1, 15),
-	.fbc_timeout_en = VOP_REG_MASK(RK3572_FBC_TIMEOUT_CTRL, 0x1, 31),
+	.fbc_timeout_en = VOP_REG(RK3572_FBC_TIMEOUT_CTRL, 0x1, 31),
 	.rkmmu_v2_en = VOP_REG_MASK(RK3572_SYS0_AXI0_MMU_CTRL, 0x1, 1),
 	.rkmmu1_v2_en = VOP_REG_MASK(RK3572_SYS1_AXI1_MMU_CTRL, 0x1, 1),
 	.mmu0_qos_en = VOP_REG_MASK(RK3572_SYS0_AXI0_MMU_CTRL2_IMD, 0x1, 0),
@@ -6745,7 +6731,6 @@ static const struct vop2_ctrl rk3576_vop_ctrl = {
 	.cfg_done_en = VOP_REG(RK3568_REG_CFG_DONE, 0x1, 15),
 	.reg_done_frm = VOP_REG_MASK(RK3576_SYS_PORT_CTRL_IMD, 0x7, 0),
 	.wb_cfg_done = VOP_REG_MASK(RK3568_REG_CFG_DONE, 0x1, 14),
-	.win_cfg_done = VOP_REG_MASK(RK3588_SYS_WIN_REG_CFG_DONE, 0xffffffff, 0),
 	.auto_gating_en = VOP_REG(RK3568_SYS_AUTO_GATING_CTRL, 0x1, 31),
 	.aclk_pre_auto_gating_en = VOP_REG(RK3568_SYS_AUTO_GATING_CTRL, 0x1, 7),
 	.version = VOP_REG(RK3568_VERSION_INFO, 0xffff, 16),
@@ -6880,7 +6865,6 @@ static const struct vop_grf_ctrl rk3588_vo1_grf_ctrl = {
 static const struct vop2_ctrl rk3588_vop_ctrl = {
 	.cfg_done_en = VOP_REG(RK3568_REG_CFG_DONE, 0x1, 15),
 	.wb_cfg_done = VOP_REG_MASK(RK3568_REG_CFG_DONE, 0x1, 14),
-	.win_cfg_done = VOP_REG_MASK(RK3588_SYS_WIN_REG_CFG_DONE, 0xffffffff, 0),
 	.auto_gating_en = VOP_REG(RK3568_SYS_AUTO_GATING_CTRL, 0x1, 31),
 	.dma_finish_mode = VOP_REG(RK3588_SYS_VAR_FREQ_CTRL, 0x3, 0),
 	.axi_dma_finish_and_en = VOP_REG(RK3588_SYS_VAR_FREQ_CTRL, 0x1, 2),
@@ -7370,7 +7354,7 @@ static const struct vop2_data rk3528_vop = {
 	.axi_intr = rk3528_vop_axi_intr,
 	.nr_axi_intr = ARRAY_SIZE(rk3528_vop_axi_intr),
 	.vp = rk3528_vop_video_ports,
-	.wb = &rk3568_vop_wb_data,
+	.wb = &rk3588_vop_wb_data,
 	.win = rk3528_vop_win_data,
 	.win_size = ARRAY_SIZE(rk3528_vop_win_data),
 	.dump_regs = rk3528_dump_regs,
@@ -7425,7 +7409,7 @@ static const struct vop2_data rk3562_vop = {
 	.axi_intr = rk3528_vop_axi_intr,
 	.nr_axi_intr = ARRAY_SIZE(rk3528_vop_axi_intr),
 	.vp = rk3562_vop_video_ports,
-	.wb = &rk3568_vop_wb_data,
+	.wb = &rk3588_vop_wb_data,
 	.win = rk3562_vop_win_data,
 	.win_size = ARRAY_SIZE(rk3562_vop_win_data),
 	.dump_regs = rk3562_dump_regs,
@@ -7529,7 +7513,7 @@ static const struct vop2_data rk3588_vop = {
 	.vp = rk3588_vop_video_ports,
 	.conn = rk3588_conn_if_data,
 	.nr_conns = ARRAY_SIZE(rk3588_conn_if_data),
-	.wb = &rk3568_vop_wb_data,
+	.wb = &rk3588_vop_wb_data,
 	.layer = rk3568_vop_layers,
 	.win = rk3588_vop_win_data,
 	.win_size = ARRAY_SIZE(rk3588_vop_win_data),

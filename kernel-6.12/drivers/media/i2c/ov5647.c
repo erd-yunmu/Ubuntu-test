@@ -18,9 +18,7 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/of_graph.h>
-#include <linux/rk-camera-module.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/videodev2.h>
@@ -71,11 +69,11 @@
 #define OV5647_NATIVE_HEIGHT		1956U
 
 #define OV5647_PIXEL_ARRAY_LEFT		16U
-#define OV5647_PIXEL_ARRAY_TOP		16U
+#define OV5647_PIXEL_ARRAY_TOP		6U
 #define OV5647_PIXEL_ARRAY_WIDTH	2592U
 #define OV5647_PIXEL_ARRAY_HEIGHT	1944U
 
-#define OV5647_VBLANK_MIN		4
+#define OV5647_VBLANK_MIN		24
 #define OV5647_VTS_MAX			32767
 
 #define OV5647_EXPOSURE_MIN		4
@@ -111,14 +109,7 @@ struct ov5647 {
 	struct v4l2_ctrl		*hblank;
 	struct v4l2_ctrl		*vblank;
 	struct v4l2_ctrl		*exposure;
-
-	u32				module_index;
-	const char			*module_facing;
-	const char			*module_name;
-	const char			*len_name;
 };
-
-#define OV5647_LANES			2
 
 static inline struct ov5647 *to_sensor(struct v4l2_subdev *sd)
 {
@@ -517,7 +508,7 @@ static const struct ov5647_mode ov5647_modes[] = {
 	{
 		.format = {
 			.code		= MEDIA_BUS_FMT_SBGGR10_1X10,
-			.colorspace	= V4L2_COLORSPACE_SRGB,
+			.colorspace	= V4L2_COLORSPACE_RAW,
 			.field		= V4L2_FIELD_NONE,
 			.width		= 2592,
 			.height		= 1944
@@ -538,7 +529,7 @@ static const struct ov5647_mode ov5647_modes[] = {
 	{
 		.format = {
 			.code		= MEDIA_BUS_FMT_SBGGR10_1X10,
-			.colorspace	= V4L2_COLORSPACE_SRGB,
+			.colorspace	= V4L2_COLORSPACE_RAW,
 			.field		= V4L2_FIELD_NONE,
 			.width		= 1920,
 			.height		= 1080
@@ -559,7 +550,7 @@ static const struct ov5647_mode ov5647_modes[] = {
 	{
 		.format = {
 			.code		= MEDIA_BUS_FMT_SBGGR10_1X10,
-			.colorspace	= V4L2_COLORSPACE_SRGB,
+			.colorspace	= V4L2_COLORSPACE_RAW,
 			.field		= V4L2_FIELD_NONE,
 			.width		= 1296,
 			.height		= 972
@@ -580,7 +571,7 @@ static const struct ov5647_mode ov5647_modes[] = {
 	{
 		.format = {
 			.code		= MEDIA_BUS_FMT_SBGGR10_1X10,
-			.colorspace	= V4L2_COLORSPACE_SRGB,
+			.colorspace	= V4L2_COLORSPACE_RAW,
 			.field		= V4L2_FIELD_NONE,
 			.width		= 640,
 			.height		= 480
@@ -591,7 +582,7 @@ static const struct ov5647_mode ov5647_modes[] = {
 			.width		= 2560,
 			.height		= 1920,
 		},
-		.pixel_rate	= 55000000,
+		.pixel_rate	= 58333000,
 		.hts		= 1852,
 		.vts		= 0x1f8,
 		.reg_list	= ov5647_640x480_10bpp,
@@ -875,44 +866,7 @@ static int ov5647_sensor_set_register(struct v4l2_subdev *sd,
 #endif
 
 /* Subdev core operations registration */
-static void ov5647_get_module_inf(struct ov5647 *sensor, struct rkmodule_inf *inf)
-{
-	memset(inf, 0, sizeof(*inf));
-	strscpy(inf->base.sensor, "ov5647", sizeof(inf->base.sensor));
-	strscpy(inf->base.module, sensor->module_name, sizeof(inf->base.module));
-	strscpy(inf->base.lens, sensor->len_name, sizeof(inf->base.lens));
-}
-
-static long ov5647_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
-{
-	struct ov5647 *sensor = to_sensor(sd);
-
-	switch (cmd) {
-	case RKMODULE_GET_MODULE_INFO:
-		ov5647_get_module_inf(sensor, arg);
-		return 0;
-	default:
-		return -ENOIOCTLCMD;
-	}
-}
-
-static int ov5647_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad,
-				struct v4l2_mbus_config *config)
-{
-	config->type = V4L2_MBUS_CSI2_DPHY;
-	config->bus.mipi_csi2.num_data_lanes = OV5647_LANES;
-
-	return 0;
-}
-
-static int ov5647_g_input_status(struct v4l2_subdev *sd, u32 *status)
-{
-	*status = 0;
-	return 0;
-}
-
 static const struct v4l2_subdev_core_ops ov5647_subdev_core_ops = {
-	.ioctl			= ov5647_ioctl,
 	.subscribe_event	= v4l2_ctrl_subdev_subscribe_event,
 	.unsubscribe_event	= v4l2_event_subdev_unsubscribe,
 #ifdef CONFIG_VIDEO_ADV_DEBUG
@@ -977,7 +931,6 @@ error_unlock:
 
 static const struct v4l2_subdev_video_ops ov5647_subdev_video_ops = {
 	.s_stream =		ov5647_s_stream,
-	.g_input_status =	ov5647_g_input_status,
 };
 
 static int ov5647_enum_mbus_code(struct v4l2_subdev *sd,
@@ -1126,7 +1079,6 @@ static const struct v4l2_subdev_pad_ops ov5647_subdev_pad_ops = {
 	.set_fmt		= ov5647_set_pad_fmt,
 	.get_fmt		= ov5647_get_pad_fmt,
 	.get_selection		= ov5647_get_selection,
-	.get_mbus_config	= ov5647_g_mbus_config,
 };
 
 static const struct v4l2_subdev_ops ov5647_subdev_ops = {
@@ -1339,6 +1291,8 @@ static int ov5647_init_controls(struct ov5647 *sensor)
 
 	v4l2_ctrl_handler_init(&sensor->ctrls, 9);
 
+	sensor->ctrls.lock = &sensor->lock;
+
 	v4l2_ctrl_new_std(&sensor->ctrls, &ov5647_ctrl_ops,
 			  V4L2_CID_AUTOGAIN, 0, 1, 1, 0);
 
@@ -1438,20 +1392,6 @@ static int ov5647_probe(struct i2c_client *client)
 	if (!sensor)
 		return -ENOMEM;
 
-	sensor->module_facing = "";
-	sensor->module_name = "";
-	sensor->len_name = "";
-	if (np) {
-		of_property_read_u32(np, RKMODULE_CAMERA_MODULE_INDEX,
-				     &sensor->module_index);
-		of_property_read_string(np, RKMODULE_CAMERA_MODULE_FACING,
-					&sensor->module_facing);
-		of_property_read_string(np, RKMODULE_CAMERA_MODULE_NAME,
-					&sensor->module_name);
-		of_property_read_string(np, RKMODULE_CAMERA_LENS_NAME,
-					&sensor->len_name);
-	}
-
 	if (IS_ENABLED(CONFIG_OF) && np) {
 		ret = ov5647_parse_dt(sensor, np);
 		if (ret) {
@@ -1483,14 +1423,14 @@ static int ov5647_probe(struct i2c_client *client)
 
 	sensor->mode = OV5647_DEFAULT_MODE;
 
-	ret = ov5647_init_controls(sensor);
-	if (ret)
-		goto mutex_destroy;
-
 	sd = &sensor->sd;
 	v4l2_i2c_subdev_init(sd, client, &ov5647_subdev_ops);
 	sd->internal_ops = &ov5647_subdev_internal_ops;
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_HAS_EVENTS;
+
+	ret = ov5647_init_controls(sensor);
+	if (ret)
+		goto mutex_destroy;
 
 	sensor->pad.flags = MEDIA_PAD_FL_SOURCE;
 	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;

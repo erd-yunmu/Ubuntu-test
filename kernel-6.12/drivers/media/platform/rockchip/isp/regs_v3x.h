@@ -2284,6 +2284,8 @@
 #define ISP39_DHAZ_ADP_RD0			(ISP3X_DHAZ_BASE + 0x00184)
 #define ISP39_DHAZ_ADP_RD1			(ISP3X_DHAZ_BASE + 0x00188)
 #define ISP39_DHAZ_LINE_CNT			(ISP3X_DHAZ_BASE + 0x0018c)
+#define ISP39_DHAZ_STAB_FRAME			(ISP3X_DHAZ_BASE + 0x00190)
+#define ISP39_DHAZ_PRE_FRAME			(ISP3X_DHAZ_BASE + 0x00194)
 
 #define ISP33_HIST_BASE				0x00003C00
 #define ISP33_HIST_CTRL				(ISP33_HIST_BASE + 0x00000)
@@ -3270,10 +3272,10 @@
 #define ISP39_DHAZ_IIR_WR_ID(x)		(((x) & 0xff) << 16)
 #define ISP39_DHAZ_IIR_WR_CLEAR		BIT(24)
 
-#define ISP33_IIR_RD_ID(x)		((x) & 0x3f)
+#define ISP33_IIR_RD_ID(x)		((x) & 0xff)
 #define ISP33_IIR_RD_P			BIT(8)
 #define ISP33_IIR_RDATA_VAL		BIT(9)
-#define ISP33_IIR_WR_ID(x)		(((x) & 0x3f) << 16)
+#define ISP33_IIR_WR_ID(x)		(((x) & 0xff) << 16)
 #define ISP33_IIR_WR_CLEAR		BIT(24)
 
 #define ISP351S_ENH_IIR_RD_P		BIT(0)

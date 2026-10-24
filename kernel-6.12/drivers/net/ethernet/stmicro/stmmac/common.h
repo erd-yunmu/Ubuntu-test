@@ -382,7 +382,6 @@ enum request_irq_err {
 	REQ_IRQ_ERR_SFTY,
 	REQ_IRQ_ERR_SFTY_UE,
 	REQ_IRQ_ERR_SFTY_CE,
-	REQ_IRQ_ERR_LPI,
 	REQ_IRQ_ERR_WOL,
 	REQ_IRQ_ERR_MAC,
 	REQ_IRQ_ERR_NO,
@@ -421,8 +420,6 @@ struct dma_features {
 	unsigned int half_duplex;
 	unsigned int hash_filter;
 	unsigned int multi_addr;
-	unsigned int additional_32_addr;
-	unsigned int additional_64_addr;
 	unsigned int pcs;
 	unsigned int sma_mdio;
 	unsigned int pmt_remote_wake_up;

@@ -27,6 +27,7 @@
 
 #include <soc/rockchip/rockchip_dmc.h>
 
+#include "rockchip_drm_crc.h"
 #include "rockchip_drm_debugfs.h"
 
 #define ROCKCHIP_MAX_FB_BUFFER	3
@@ -809,6 +810,55 @@ struct rockchip_crtc_funcs {
 	int (*set_aclk)(struct drm_crtc *crtc, enum rockchip_drm_vop_aclk_mode aclk_mode, struct dmcfreq_vop_info *vop_bw_info);
 	int (*get_crc)(struct drm_crtc *crtc);
 	void (*iommu_fault_handler)(struct drm_crtc *crtc, struct iommu_domain *iommu);
+	/*
+	 * region CRC accessors for the crc_region/crc_key/crc_freeze debugfs
+	 * interface; NULL when the CRTC driver has no region CRC support.
+	 */
+	const struct rockchip_crtc_crc_funcs *crc_funcs;
+};
+
+/**
+ * struct rockchip_crtc_crc_funcs - region CRC access callbacks
+ *
+ * Snapshot functions copy the current config/counters under the CRTC
+ * driver's lock; set functions validate, commit and reprogram the
+ * hardware block.
+ */
+struct rockchip_crtc_crc_funcs {
+	int (*get_region_count)(struct drm_crtc *crtc);
+	bool (*source_active)(struct drm_crtc *crtc);
+	/*
+	 * Latch the per-source target block from the source name currently
+	 * selected through crc/control, so the get/set callbacks below
+	 * address the right per-source arrays.  verify_crc_source must stay
+	 * free of side effects (crc_control_show calls it on every table
+	 * entry), so the target is latched here instead — by the debugfs
+	 * layer, which snapshots crc->source under crc->lock before calling.
+	 * @source_name is NULL when no source has been set yet (selects the
+	 * CRTC block, same as "auto"/"crtc").
+	 */
+	void (*resolve_target)(struct drm_crtc *crtc, const char *source_name);
+	void (*get_region)(struct drm_crtc *crtc,
+			   struct rockchip_crc_region snap[ROCKCHIP_CRC_REGION_NR],
+			   u32 mismatch_cnt[ROCKCHIP_CRC_REGION_NR],
+			   u32 freeze_cnt[ROCKCHIP_CRC_REGION_NR]);
+	void (*get_key)(struct drm_crtc *crtc,
+			u32 key_values[ROCKCHIP_CRC_KEY_VALUE_NR], u32 *key_tie);
+	void (*get_freeze)(struct drm_crtc *crtc,
+			   bool freeze_en[ROCKCHIP_CRC_REGION_NR],
+			   u32 freeze_cnt[ROCKCHIP_CRC_REGION_NR],
+			   u32 *freeze_num, bool *global_freeze_en,
+			   u32 *global_freeze_cnt);
+	/*
+	 * Validates @region and commits it; returns -EINVAL when it would
+	 * mix COLOR and ALPHA key modes with other enabled regions of the
+	 * same block (the shared KEY_VALUE pool cannot serve both formats).
+	 */
+	int (*set_region)(struct drm_crtc *crtc, int idx,
+			  const struct rockchip_crc_region *region);
+	void (*set_key)(struct drm_crtc *crtc, const u32 *vals, int n,
+			u32 tie_val, bool tie_set);
+	void (*set_freeze)(struct drm_crtc *crtc, u32 freeze_num, int global_en);
 };
 
 struct rockchip_dclk_pll {
@@ -950,8 +1000,6 @@ void rockchip_drm_crtc_standby(struct drm_crtc *crtc, bool standby);
 void rockchip_drm_crtc_output_post_enable(struct drm_crtc *crtc, int intf);
 void rockchip_drm_crtc_output_pre_disable(struct drm_crtc *crtc, int intf);
 
-int devm_rockchip_drm_register_sub_dev(struct device *dev,
-				       struct rockchip_drm_sub_dev *sub_dev);
 struct rockchip_drm_sub_dev *rockchip_drm_get_sub_dev(struct device_node *node);
 int rockchip_drm_add_modes_noedid(struct drm_connector *connector);
 void rockchip_drm_te_handle(struct drm_crtc *crtc);
@@ -962,6 +1010,8 @@ const char *rockchip_drm_get_color_range_name(enum drm_color_range range);
 #if IS_REACHABLE(CONFIG_DRM_ROCKCHIP)
 int rockchip_drm_get_sub_dev_type(void);
 u32 rockchip_drm_get_scan_line_time_ns(void);
+int devm_rockchip_drm_register_sub_dev(struct device *dev,
+				       struct rockchip_drm_sub_dev *sub_dev);
 #else
 static inline int rockchip_drm_get_sub_dev_type(void)
 {
@@ -971,6 +1021,12 @@ static inline int rockchip_drm_get_sub_dev_type(void)
 static inline u32 rockchip_drm_get_scan_line_time_ns(void)
 {
 	return 0;
+}
+
+static inline int devm_rockchip_drm_register_sub_dev(struct device *dev,
+						     struct rockchip_drm_sub_dev *sub_dev)
+{
+	return -ENOSYS;
 }
 #endif
 
@@ -992,6 +1048,7 @@ struct dma_buf *rockchip_drm_gem_prime_export(struct drm_gem_object *obj, int fl
 long rockchip_drm_dclk_round_rate(u32 version, struct clk *dclk, unsigned long rate);
 int rockchip_drm_dclk_set_rate(u32 version, struct clk *dclk, unsigned long rate);
 bool rockchip_drm_is_afbc(struct drm_plane *plane, u64 modifier);
+bool rockchip_drm_is_afrc(struct drm_plane *plane, u64 modifier);
 bool rockchip_drm_is_rfbc(struct drm_plane *plane, u64 modifier);
 const char *rockchip_drm_modifier_to_string(uint64_t modifier);
 void rockchip_drm_reset_iommu_fault_handler_rate_limit(void);
@@ -1042,6 +1099,11 @@ extern struct platform_driver rockchip_tve_driver;
 extern struct platform_driver dw_dp_driver;
 extern struct platform_driver vconn_platform_driver;
 extern struct platform_driver rockchip_vkms_platform_driver;
+
+static inline bool rockchip_drm_format_info_has_uv_plane(const struct drm_format_info *info)
+{
+	return info->is_yuv && info->num_planes > 1;
+}
 
 static inline struct rockchip_encoder *to_rockchip_encoder(struct drm_encoder *encoder)
 {

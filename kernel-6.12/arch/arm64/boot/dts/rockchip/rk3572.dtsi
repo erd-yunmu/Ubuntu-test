@@ -10,6 +10,7 @@
 #include <dt-bindings/power/rockchip,rk3572-power-controller.h>
 #include <dt-bindings/reset/rockchip,rk3572-cru.h>
 #include <dt-bindings/soc/rockchip,boot-mode.h>
+#include <dt-bindings/soc/rockchip-csu.h>
 #include <dt-bindings/soc/rockchip-system-status.h>
 #include <dt-bindings/suspend/rockchip-rk3572.h>
 #include <dt-bindings/thermal/thermal.h>
@@ -1040,6 +1041,32 @@
 		compatible = "rockchip,rk3572-csi2-dphy";
 		rockchip,hw = <&csi2_dphy0_hw>, <&csi2_dphy1_hw>;
 		status = "disabled";
+	};
+
+	csu: csu {
+		compatible = "rockchip,rk3572-csu";
+		rockchip,clock = <CSU_VOP_ACLK AUTOCS_VOP_ROOT_ACLK_ID>;
+		rockchip,bus =
+			<AUTOCS_LITCORE0_ID             0x00000040 0x1000>,
+			<AUTOCS_LITCORE1_ID             0x00000040 0x1000>,
+			<AUTOCS_BIGCORE_ID              0x00000040 0x1000>,
+			<AUTOCS_CCI_ID                  0x00000040 0x1fff>,
+			<AUTOCS_VOP_ROOT_ACLK_ID        0x000004ff 0x8fff>,
+			<AUTOCS_VOP_ROOT_HCLK_ID        0x00000040 0x1fff>,
+			<AUTOCS_TOP_BIU_ACLK_ID         0x00000040 0x1fff>,
+			<AUTOCS_TOP_BIU_HCLK_ID         0x00000040 0x1fff>,
+			<AUTOCS_TOP_MID_BIU_ACLK_ID     0x00000040 0x1fff>,
+			<AUTOCS_BUS_ROOT_HCLK_ID        0x00000040 0x1fff>,
+			<AUTOCS_BUS_ROOT_PCLK_ID        0x00000040 0x1fff>,
+			<AUTOCS_PHP_ROOT_ACLK_ID        0x00000040 0x9fff>,
+			<AUTOCS_VO_ROOT_PCLK_ID         0x00000040 0x1fff>,
+			<AUTOCS_CENTER_ROOT_ACLK_ID     0x00000040 0x1fff>,
+			<AUTOCS_CENTER_ROOT_HCLK_ID     0x00000040 0x1fff>,
+			<AUTOCS_CENTER_LOW_ROOT_ACLK_ID 0x00000040 0x1fff>,
+			<AUTOCS_DDR_ROOT_PCLK_ID        0x00000040 0x1fff>,
+			<AUTOCS_NVM0_ROOT_ACLK_ID       0x00000040 0x1fff>,
+			<AUTOCS_NVM0_ROOT_HCLK_ID       0x00000040 0x1fff>,
+			<AUTOCS_NVM1_ROOT_HCLK_ID       0x00000040 0x1fff>;
 	};
 
 	display_subsystem: display-subsystem {
@@ -2409,7 +2436,7 @@
 			power-domains = <&power RK3572_PD_NPU>;
 			operating-points-v2 = <&npu_opp_table>;
 			iommus = <&rknpu_mmu>;
-			memory-region = <&rknpu_nbuf>;
+			memory-region = <&rknpu_nbuf>, <&rknpu_sram>;
 			rockchip,grf = <&npu_grf>;
 			status = "disabled";
 		};
@@ -2978,6 +3005,8 @@
 			rockchip,aclk-normal-mode-rates = <500000000>;
 			rockchip,aclk-reset-mode-rates = <594000000>;
 			rockchip,aclk-advanced-mode-rates = <702000000>;
+			rockchip,csu = <&csu CSU_VOP_ACLK>;
+			rockchip,csu-names = "aclk";
 			iommus = <&vop_mmu>;
 			power-domains = <&power RK3572_PD_VOP_PRE>;
 			rockchip,ioc-grf = <&ioc_grf>;
@@ -4228,7 +4257,7 @@
 			cpul_leakage: cpul-leakage@33 {
 				reg = <0x33 0x1>;
 			};
-			gpu_leakage: npu-leakage@34 {
+			gpu_leakage: gpu-leakage@34 {
 				reg = <0x34 0x1>;
 			};
 			npu_leakage: npu-leakage@35 {
@@ -4236,6 +4265,41 @@
 			};
 			logic_leakage: logic-leakage@36 {
 				reg = <0x36 0x1>;
+			};
+			bigcore_tsadc_trim_l: bigcore-tsadc-trim-l@38 {
+				reg = <0x38 0x1>;
+			};
+			bigcore_tsadc_trim_h: bigcore-tsadc-trim-h@39 {
+				reg = <0x39 0x1>;
+				bits = <0 1>;
+			};
+			litcore_tsadc_trim_l: litcore-tsadc-trim-l@3a {
+				reg = <0x3a 0x1>;
+			};
+			litcore_tsadc_trim_h: litcore-tsadc-trim-h@3b {
+				reg = <0x3b 0x1>;
+				bits = <0 1>;
+			};
+			ddr_tsadc_trim_l: ddr-tsadc-trim-l@3c {
+				reg = <0x3c 0x1>;
+			};
+			ddr_tsadc_trim_h: ddr-tsadc-trim-h@3d {
+				reg = <0x3d 0x1>;
+				bits = <0 1>;
+			};
+			gpu_npu_tsadc_trim_l: gpu-npu-tsadc-trim-l@3e {
+				reg = <0x3e 0x1>;
+			};
+			gpu_npu_tsadc_trim_h: gpu-npu-tsadc-trim-h@3f {
+				reg = <0x3f 0x1>;
+				bits = <0 1>;
+			};
+			soc_tsadc_trim_l: soc-tsadc-trim-l@40 {
+				reg = <0x40 0x1>;
+			};
+			soc_tsadc_trim_h: soc-tsadc-trim-h@41 {
+				reg = <0x41 0x1>;
+				bits = <0 1>;
 			};
 		};
 
@@ -4491,7 +4555,7 @@
 			status = "disabled";
 		};
 
-		i3c: i3c-master@2ab40000 {
+		i3c: i3c@2ab40000 {
 			compatible = "rockchip,i3c-master";
 			reg = <0x0 0x2ab40000 0x0 0x1000>;
 			interrupts = <GIC_SPI 335 IRQ_TYPE_LEVEL_HIGH>;
@@ -5343,7 +5407,35 @@
 			rockchip,hw-tshut-temp = <120000>;
 			rockchip,hw-tshut-mode = <0>; /* tshut mode 0:CRU 1:GPIO */
 			rockchip,hw-tshut-polarity = <0>; /* tshut polarity 0:LOW 1:HIGH */
+			#address-cells = <1>;
+			#size-cells = <0>;
 			status = "disabled";
+
+			tsadc@0 {
+				reg = <0>;
+				nvmem-cells = <&soc_tsadc_trim_l>, <&soc_tsadc_trim_h>;
+				nvmem-cell-names = "trim_l", "trim_h";
+			};
+			tsadc@1 {
+				reg = <1>;
+				nvmem-cells = <&gpu_npu_tsadc_trim_l>, <&gpu_npu_tsadc_trim_h>;
+				nvmem-cell-names = "trim_l", "trim_h";
+			};
+			tsadc@2 {
+				reg = <2>;
+				nvmem-cells = <&ddr_tsadc_trim_l>, <&ddr_tsadc_trim_h>;
+				nvmem-cell-names = "trim_l", "trim_h";
+			};
+			tsadc@3 {
+				reg = <3>;
+				nvmem-cells = <&litcore_tsadc_trim_l>, <&litcore_tsadc_trim_h>;
+				nvmem-cell-names = "trim_l", "trim_h";
+			};
+			tsadc@4 {
+				reg = <4>;
+				nvmem-cells = <&bigcore_tsadc_trim_l>, <&bigcore_tsadc_trim_h>;
+				nvmem-cell-names = "trim_l", "trim_h";
+			};
 		};
 
 		mipitx_dphy: phy@2c300000 {
@@ -5372,6 +5464,9 @@
 			clock-output-names = "clk_hdmiphy_pixel0";
 			#clock-cells = <0>;
 			#phy-cells = <0>;
+			rockchip,phy-table =
+				/bits/ 64 <600000000>,
+				/bits/ 8 <0x2f 0x00 0x00 0x1d 0x08 0x2f 0x00 0x00 0x1d 0x08>;
 			status = "disabled";
 		};
 
@@ -5411,6 +5506,7 @@
 			reset-names = "combphy-apb", "combphy";
 			rockchip,pipe-grf = <&php_grf>;
 			rockchip,pipe-phy-grf = <&pipe_phy0_grf>;
+			rockchip,u3-port-num = <0>;
 			status = "disabled";
 		};
 
@@ -5426,6 +5522,7 @@
 			reset-names = "combphy-apb", "combphy";
 			rockchip,pipe-grf = <&php_grf>;
 			rockchip,pipe-phy-grf = <&pipe_phy1_grf>;
+			rockchip,u3-port-num = <1>;
 			status = "disabled";
 		};
 
@@ -5568,6 +5665,11 @@
 		rknpu_nbuf: rknpu-nbuf@3ff00000 {
 			reg = <0x0 0x3ff00000 0x0 0x60000>;
 			iommu-addresses = <&rknpu 0x0 0x3ff00000 0x0 0x60000>;
+		};
+
+		rknpu_sram: rknpu-sram@3ff80000 {
+			reg = <0x0 0x3ff80000 0x0 0x8000>;
+			iommu-addresses = <&rknpu 0x0 0x3ff80000 0x0 0x8000>;
 		};
 
 		sram: sram@3ff88000 {

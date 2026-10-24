@@ -58,13 +58,10 @@
 
 static u8 m89or101 = TRUE;
 static u8 bgt911 = FALSE;
-static u8 bgt9272 = FALSE;
 static u8 bgt9110 = FALSE;
 static u8 bgt9111 = FALSE;
 static u8 bgt970 = FALSE;
 static u8 bgt910 = FALSE;
-static u8 bgt2059 = FALSE;
-static u8 bgt928 = FALSE;
 static u8 gtp_change_x2y = TRUE;
 static u8 gtp_x_reverse = FALSE;
 static u8 gtp_y_reverse = TRUE;
@@ -438,7 +435,7 @@ static void gtp_touch_down(struct goodix_ts_data* ts,s32 id,s32 x,s32 y,s32 w)
 
 #if GTP_ICS_SLOT_REPORT
     input_mt_slot(ts->input_dev, id);
-    input_report_abs(ts->input_dev, ABS_MT_TRACKING_ID, id);
+    input_mt_report_slot_state(ts->input_dev, MT_TOOL_FINGER, true);
     input_report_abs(ts->input_dev, ABS_MT_POSITION_X, x);
     input_report_abs(ts->input_dev, ABS_MT_POSITION_Y, y);
     input_report_abs(ts->input_dev, ABS_MT_TOUCH_MAJOR, w);
@@ -468,7 +465,7 @@ static void gtp_touch_up(struct goodix_ts_data* ts, s32 id)
 {
 #if GTP_ICS_SLOT_REPORT
     input_mt_slot(ts->input_dev, id);
-    input_report_abs(ts->input_dev, ABS_MT_TRACKING_ID, -1);
+    input_mt_report_slot_state(ts->input_dev, MT_TOOL_FINGER, false);
     GTP_DEBUG("Touch id[%2d] release!", id);
 #else
     input_report_key(ts->input_dev, BTN_TOUCH, 0);
@@ -511,8 +508,7 @@ static void gtp_pen_init(struct goodix_ts_data *ts)
     input_set_abs_params(ts->pen_dev, ABS_MT_POSITION_Y, 0, ts->abs_y_max, 0, 0);
     input_set_abs_params(ts->pen_dev, ABS_MT_PRESSURE, 0, 255, 0, 0);
     input_set_abs_params(ts->pen_dev, ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0);
-    input_set_abs_params(ts->pen_dev, ABS_MT_TRACKING_ID, 0, 255, 0, 0);
-    
+
     ts->pen_dev->name = "goodix-pen";
     ts->pen_dev->id.bustype = BUS_I2C;
     
@@ -520,6 +516,8 @@ static void gtp_pen_init(struct goodix_ts_data *ts)
     if (ret)
     {
         GTP_ERROR("Register %s input device failed", ts->pen_dev->name);
+        input_free_device(ts->pen_dev);
+        ts->pen_dev = NULL;
         return;
     }
 }
@@ -528,14 +526,17 @@ static void gtp_pen_down(s32 x, s32 y, s32 w, s32 id)
 {
     struct goodix_ts_data *ts = i2c_get_clientdata(gtp_i2c_connect_client);
 
+    if (!ts->pen_dev)
+        return;
+
 	if (gtp_change_x2y)
 		GTP_SWAP(x, y);
 
-    
+
     input_report_key(ts->pen_dev, BTN_TOOL_PEN, 1);
 #if GTP_ICS_SLOT_REPORT
     input_mt_slot(ts->pen_dev, id);
-    input_report_abs(ts->pen_dev, ABS_MT_TRACKING_ID, id);
+    input_mt_report_slot_state(ts->pen_dev, MT_TOOL_PEN, true);
     input_report_abs(ts->pen_dev, ABS_MT_POSITION_X, x);
     input_report_abs(ts->pen_dev, ABS_MT_POSITION_Y, y);
     input_report_abs(ts->pen_dev, ABS_MT_PRESSURE, w);
@@ -555,14 +556,17 @@ static void gtp_pen_down(s32 x, s32 y, s32 w, s32 id)
 static void gtp_pen_up(s32 id)
 {
     struct goodix_ts_data *ts = i2c_get_clientdata(gtp_i2c_connect_client);
-    
+
+    if (!ts->pen_dev)
+        return;
+
     input_report_key(ts->pen_dev, BTN_TOOL_PEN, 0);
-    
+
 #if GTP_ICS_SLOT_REPORT
     input_mt_slot(ts->pen_dev, id);
-    input_report_abs(ts->pen_dev, ABS_MT_TRACKING_ID, -1);
+    input_mt_report_slot_state(ts->pen_dev, MT_TOOL_PEN, false);
 #else
-    
+
     input_report_key(ts->pen_dev, BTN_TOUCH, 0);
 #endif
 
@@ -1010,11 +1014,17 @@ static void goodix_ts_work_func(struct work_struct *work)
     if (pen_active)
     {
         pen_active = 0;
+#if GTP_ICS_SLOT_REPORT
+        input_mt_sync_frame(ts->pen_dev);
+#endif
         input_sync(ts->pen_dev);
     }
     else
 #endif
     {
+#if GTP_ICS_SLOT_REPORT
+        input_mt_sync_frame(ts->input_dev);
+#endif
         input_sync(ts->input_dev);
     }
 
@@ -1465,11 +1475,6 @@ static s32 gtp_init_panel(struct goodix_ts_data *ts)
 		cfg_info_len[0] =  CFG_GROUP_LEN(gtp_dat_gt9111);
 	}
 
-    if (bgt9272) {
-		send_cfg_buf[0] = gtp_dat_gt9272;
-		cfg_info_len[0] = CFG_GROUP_LEN(gtp_dat_gt9272);
-	}
-
 	if (bgt970) {
 		send_cfg_buf[0] = gtp_dat_9_7;
 		cfg_info_len[0] = CFG_GROUP_LEN(gtp_dat_9_7);
@@ -1478,16 +1483,6 @@ static s32 gtp_init_panel(struct goodix_ts_data *ts)
 	if (bgt910) {
 		send_cfg_buf[0] = gtp_dat_7;
 		cfg_info_len[0] = CFG_GROUP_LEN(gtp_dat_7);
-	}
-
-	if (bgt2059) {
-		send_cfg_buf[0] = gtp_dat_tpc2059;
-		cfg_info_len[0] = CFG_GROUP_LEN(gtp_dat_tpc2059);
-	}
-
-	if (bgt928) {
-		send_cfg_buf[0] = gtp_dat_gt928;
-		cfg_info_len[0] = CFG_GROUP_LEN(gtp_dat_gt928);
 	}
 
     GTP_DEBUG_FUNC();
@@ -2099,6 +2094,7 @@ static s8 gtp_request_input_dev(struct i2c_client *client,
     input_mt_init_slots(ts->input_dev, 16, INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);     // in case of "out of memory"
 #else
     ts->input_dev->keybit[BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH);
+    input_set_abs_params(ts->input_dev, ABS_MT_TRACKING_ID, 0, 255, 0, 0);
 #endif
     __set_bit(INPUT_PROP_DIRECT, ts->input_dev->propbit);
 
@@ -2124,7 +2120,6 @@ static s8 gtp_request_input_dev(struct i2c_client *client,
     input_set_abs_params(ts->input_dev, ABS_MT_POSITION_Y, 0, ts->abs_y_max, 0, 0);
     input_set_abs_params(ts->input_dev, ABS_MT_WIDTH_MAJOR, 0, 255, 0, 0);
     input_set_abs_params(ts->input_dev, ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0);
-    input_set_abs_params(ts->input_dev, ABS_MT_TRACKING_ID, 0, 255, 0, 0);
 
     sprintf(phys, "input/ts");
     ts->input_dev->name = goodix_ts_name;
@@ -2673,17 +2668,6 @@ static int goodix_ts_probe(struct i2c_client *client)
 		gtp_change_x2y = TRUE;
 		gtp_x_reverse = FALSE;
 		gtp_y_reverse = TRUE;
-	} else if (val == 9271) {
-		m89or101 = TRUE;
-		gtp_change_x2y = TRUE;
-		gtp_x_reverse = TRUE;
-		gtp_y_reverse = FALSE;
-	} else if (val == 9272) {
-        m89or101 = FALSE;
-        bgt9272 = TRUE;
-		gtp_change_x2y = FALSE;
-		gtp_x_reverse = FALSE;
-		gtp_y_reverse = FALSE;
 	} else if (val == 101) {
 		m89or101 = FALSE;
 		gtp_change_x2y = TRUE;
@@ -2706,24 +2690,6 @@ static int goodix_ts_probe(struct i2c_client *client)
 		bgt9111 = TRUE;
 		gtp_change_x2y = TRUE;
 		gtp_x_reverse = FALSE;
-		gtp_y_reverse = FALSE;
-	} else if (val == 2059) {
-		/* TPC2059 7" 1024x600 panel (Youyeetoo R1 / YY3588 DSI kits):
-		 * vendor cfg blob reports raw coordinates 1:1 with the panel.
-		 */
-		m89or101 = FALSE;
-		bgt2059 = TRUE;
-		gtp_change_x2y = FALSE;
-		gtp_x_reverse = FALSE;
-		gtp_y_reverse = FALSE;
-	} else if (val == 928) {
-		/* GT928 11.6" 1920x1080 eDP kit (Youyeetoo YY3588): sensor is
-		 * portrait-wired, swap axes and reverse X per vendor tuning.
-		 */
-		m89or101 = FALSE;
-		bgt928 = TRUE;
-		gtp_change_x2y = TRUE;
-		gtp_x_reverse = TRUE;
 		gtp_y_reverse = FALSE;
 	} else if (val == 970) {
 		m89or101 = FALSE;

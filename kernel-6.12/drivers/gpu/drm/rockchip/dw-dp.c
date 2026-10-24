@@ -526,8 +526,6 @@ struct dw_dp {
 	struct list_head mst_conn_list;
 	struct rockchip_dp_aux_client *aux_client;
 
-	const struct drm_edid *cached_edid;
-
 	struct dentry *debugfs_dir;
 	struct drm_info_list *debugfs_files;
 	struct typec_mux_dev *mux;
@@ -1781,17 +1779,11 @@ static int dw_dp_connector_get_modes(struct drm_connector *connector)
 	if (!num_modes) {
 		edid = drm_bridge_edid_read(&dp->bridge, connector);
 		if (edid) {
-			drm_edid_free(dp->cached_edid);
-			dp->cached_edid = drm_edid_dup(edid);
 			drm_edid_connector_update(connector, edid);
 			num_modes = drm_edid_connector_add_modes(connector);
 			dw_dp_update_hdr_property(connector);
 			dw_dp_update_dfp(dp, edid);
 			drm_edid_free(edid);
-		} else if (dp->cached_edid) {
-			dev_warn(dp->dev, "EDID read failed, using cached EDID\n");
-			drm_edid_connector_update(connector, dp->cached_edid);
-			num_modes = drm_edid_connector_add_modes(connector);
 		}
 	}
 
@@ -2330,13 +2322,14 @@ static int dw_dp_link_clock_recovery(struct dw_dp *dp)
 	struct dw_dp_link *link = &dp->link;
 	u8 status[DP_LINK_STATUS_SIZE];
 	unsigned int tries = 0;
-	int ret;
+	unsigned int max_retries = 50;
+	int ret, i;
 
 	ret = dw_dp_link_train_set_pattern(dp, DP_TRAINING_PATTERN_1);
 	if (ret)
 		return ret;
 
-	for (;;) {
+	for (i = 0; i < max_retries; i++) {
 		ret = dw_dp_link_train_update_vs_emph(dp);
 		if (ret)
 			return ret;
@@ -3495,7 +3488,6 @@ static ssize_t dw_dp_aux_transfer(struct drm_dp_aux *aux,
 	unsigned long timeout = msecs_to_jiffies(10);
 	u32 status, value;
 	ssize_t ret = 0;
-	int retry;
 
 	if (WARN_ON(msg->size > 16))
 		return -E2BIG;
@@ -3525,34 +3517,12 @@ static ssize_t dw_dp_aux_transfer(struct drm_dp_aux *aux,
 		value = FIELD_PREP(I2C_ADDR_ONLY, 1);
 	value |= FIELD_PREP(AUX_CMD_TYPE, msg->request);
 	value |= FIELD_PREP(AUX_ADDR, msg->address);
-	for (retry = 0; retry < 2; retry++) {
-		reinit_completion(&dp->complete);
-		regmap_write(dp->regmap, DPTX_AUX_CMD, value);
+	reinit_completion(&dp->complete);
+	regmap_write(dp->regmap, DPTX_AUX_CMD, value);
 
-		status = wait_for_completion_timeout(&dp->complete, timeout);
-		if (status)
-			break;
-
-		/*
-		 * AUX timeout: reset the AUX block and retry. On USB-C DP
-		 * Alt Mode the channel can stick after a long main-link
-		 * transmission; resetting it restores link training.
-		 */
-		if (retry == 0) {
-			dev_warn_ratelimited(dp->dev,
-					     "AUX timeout, resetting (cmd=0x%x addr=0x%x)\n",
-					     msg->request, msg->address);
-			dw_dp_aux_reset(dp);
-			usleep_range(100, 200);
-			dw_dp_aux_init(dp);
-		}
-	}
-
+	status = wait_for_completion_timeout(&dp->complete, timeout);
 	if (!status) {
-		regmap_read(dp->regmap, DPTX_AUX_STATUS, &value);
-		dev_dbg(dp->dev,
-			"AUX timeout after recovery: cmd=0x%x addr=0x%x size=%zu, AUX_STATUS=0x%x\n",
-			msg->request, msg->address, msg->size, value);
+		dw_dp_dbg(dp, "timeout waiting for AUX reply\n");
 		dw_dp_aux_reset(dp);
 		ret = -ETIMEDOUT;
 		goto out;
@@ -5030,8 +5000,6 @@ out:
 		return status;
 	}
 	if (status == connector_status_disconnected) {
-		drm_edid_free(dp->cached_edid);
-		dp->cached_edid = NULL;
 		if (dp->is_mst) {
 			dev_info(dp->dev, "MST device may have disappeared\n");
 			dp->is_mst = false;
@@ -5294,12 +5262,17 @@ static int dw_dp_link_retrain(struct dw_dp *dp)
 	struct drm_device *dev = dp->bridge.dev;
 	struct drm_bridge *bridge = &dp->bridge;
 	struct drm_modeset_acquire_ctx ctx;
+	unsigned int old_rate, old_lanes;
+	struct dw_dp_link *link = &dp->link;
 	int ret;
 
 	if (!dw_dp_needs_link_retrain(dp))
 		return 0;
 
 	dw_dp_dbg(dp, "Retraining link\n");
+
+	old_rate = link->rate;
+	old_lanes = link->lanes;
 
 	drm_modeset_acquire_init(&ctx, 0);
 	for (;;) {
@@ -5310,11 +5283,34 @@ static int dw_dp_link_retrain(struct dw_dp *dp)
 		drm_modeset_backoff(&ctx);
 	}
 
+	/*
+	 * In SST mode, the VOP data path must be disabled before link
+	 * retraining. Keeping it active while the link status changes can
+	 * trigger a DP FIFO overflow, since the controller is still
+	 * receiving pixel data from the VOP while the link is being
+	 * re-negotiated.
+	 *
+	 * After retraining, if the link rate or lane count has changed, the
+	 * DW-DP internal configurations (e.g., TU size, init threshold)
+	 * that depend on these parameters must be reconfigured via
+	 * dw_dp_video_enable(); otherwise the display may become abnormal.
+	 * Finally, re-enable the VOP data path to resume video output.
+	 */
 	if (bridge->encoder->crtc)
 		dw_dp_enable_vop_gate(dp, bridge->encoder->crtc, dp->id, false);
 	ret = dw_dp_link_train(dp);
-	if (bridge->encoder->crtc)
+	if (bridge->encoder->crtc) {
+		if (!ret && (link->rate != old_rate || link->lanes != old_lanes)) {
+			dw_dp_dbg(dp, "Link parameters changed: lanes %u -> %u, rate %u -> %u\n",
+				  old_lanes, link->lanes, old_rate, link->rate);
+			ret = dw_dp_video_enable(dp, &dp->video, &dp->connector, 0);
+			if (ret)
+				dev_err(dp->dev,
+					"failed to reconfigure video after link retraining: %d\n",
+					ret);
+		}
 		dw_dp_enable_vop_gate(dp, bridge->encoder->crtc, dp->id, true);
+	}
 
 	drm_modeset_drop_locks(&ctx);
 	drm_modeset_acquire_fini(&ctx);
@@ -5900,8 +5896,6 @@ static int dw_dp_register_audio_driver(struct dw_dp *dp, struct dw_dp_audio *aud
 		.spdif = 1,
 		.i2s = 1,
 		.max_i2s_channels = 8,
-		.no_i2s_capture = 1,
-		.no_spdif_capture = 1,
 		.data = audio,
 	};
 	struct platform_device_info pdevinfo = {
@@ -6557,8 +6551,6 @@ static void dw_dp_remove(struct platform_device *pdev)
 {
 	struct dw_dp *dp = platform_get_drvdata(pdev);
 
-	drm_edid_free(dp->cached_edid);
-	dp->cached_edid = NULL;
 	component_del(dp->dev, &dw_dp_component_ops);
 	cancel_work_sync(&dp->hpd_work);
 	cancel_delayed_work_sync(&dp->hotplug.state_work);

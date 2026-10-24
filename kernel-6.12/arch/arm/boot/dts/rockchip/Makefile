@@ -5,6 +5,7 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rv1103b-evb1-v10-amp.dtb \
 	rv1103b-evb1-v10-dual-cam.dtb \
 	rv1103b-evb1-v10-external-codec.dtb \
+	rv1103b-evb1-v10-fastboot-emmc.dtb \
 	rv1103b-evb1-v10-thunderboot-spi-nand.dtb \
 	rv1103b-evb1-v10-thunderboot-spi-nor.dtb \
 	rv1103b-evb1-v10-spi-nor.dtb \
@@ -27,6 +28,16 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rv1106b-evb2-v10-4k-aov.dtb \
 	rv1106b-evb2-v10-aov.dtb \
 	rv1106b-evb2-v10-aov-dual-cam.dtb \
+	rv1106b-evb2-v10-bga-aov-spi-nand-tb.dtb \
+	rv1106b-evb2-v10-bga-aov-spi-nand.dtb \
+	rv1106b-evb2-v10-bga-aov-spi-nor-tb.dtb \
+	rv1106b-evb2-v10-bga-aov-spi-nor.dtb \
+	rv1106b-evb2-v10-bga-dual-cam-aov-tb.dtb \
+	rv1106b-evb2-v10-bga-dual-cam-spi-nor.dtb \
+	rv1106b-evb2-v10-bga-dual-cam-tb.dtb \
+	rv1106b-evb2-v10-bga-emmc.dtb \
+	rv1106b-evb2-v10-bga-spi-nand.dtb \
+	rv1106b-evb2-v10-bga-spi-nor.dtb \
 	rv1106b-evb2-v10-400w-aov.dtb \
 	rv1106b-evb2-v10-dual-cam.dtb \
 	rv1106b-evb2-v10-emmc.dtb \
@@ -225,16 +236,3 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3539-test1-lp4x-v10.dtb \
 	rk3539-test2-ddr3-v10.dtb \
 	rk3562-evb2-ddr4-v10.dtb
-
-# Armbian boards brought forward from rk-6.1-rkr7.2
-dtb-$(CONFIG_ARCH_ROCKCHIP) += \
-	rk3506b-armsom-forge1.dtb \
-	rk3506b-luckfox-lyra-ultra-w.dtb \
-	rk3506b-luckfox-lyra-zero-w-sd.dtb \
-	rk3506g-ebyte-ecb41-pge.dtb \
-	rk3506g-luckfox-lyra-plus-sd.dtb \
-	rk3506j-forlinx-OK3506-S12_nand-microsd.dtb \
-	rv1103g-luckfox-pico-mini.dtb \
-	rv1106g-luckfox-pico-pro-max.dtb
-
-subdir-y += overlay

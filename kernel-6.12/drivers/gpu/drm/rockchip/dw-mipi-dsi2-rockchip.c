@@ -232,6 +232,7 @@ struct dw_mipi_dsi2_plat_data {
 	const u32 max_vfp;
 	const u32 max_vsync;
 	const u32 max_vbp;
+	const u32 vrr_mode;
 };
 
 struct dw_mipi_dsi2 {
@@ -536,7 +537,8 @@ static void dw_mipi_dsi2_encoder_atomic_disable(struct drm_encoder *encoder,
 			drm_panel_disable(dsi2->panel);
 	}
 
-	rockchip_drm_crtc_standby(encoder->crtc, 1);
+	if (new_crtc_state && new_crtc_state->self_refresh_active)
+		rockchip_drm_crtc_standby(encoder->crtc, 1);
 
 	dw_mipi_dsi2_disable(dsi2);
 
@@ -547,7 +549,8 @@ static void dw_mipi_dsi2_encoder_atomic_disable(struct drm_encoder *encoder,
 
 	dw_mipi_dsi2_post_disable(dsi2);
 
-	rockchip_drm_crtc_standby(encoder->crtc, 0);
+	if (new_crtc_state && new_crtc_state->self_refresh_active)
+		rockchip_drm_crtc_standby(encoder->crtc, 0);
 
 	if (dsi2->slave)
 		output_if = VOP_OUTPUT_IF_MIPI0 | VOP_OUTPUT_IF_MIPI1;
@@ -1051,7 +1054,8 @@ static void dw_mipi_dsi2_encoder_atomic_enable(struct drm_encoder *encoder,
 	if (crtc)
 		old_crtc_state = drm_atomic_get_old_crtc_state(state, crtc);
 
-	rockchip_drm_crtc_standby(encoder->crtc, 1);
+	if (dw_mipi_dsi2_is_cmd_mode(dsi2) || !dsi2->auto_calc_mode)
+		rockchip_drm_crtc_standby(encoder->crtc, 1);
 
 	ret = dw_mipi_dsi2_encoder_mode_set(dsi2, state);
 	if (ret) {
@@ -1076,7 +1080,8 @@ static void dw_mipi_dsi2_encoder_atomic_enable(struct drm_encoder *encoder,
 
 	dw_mipi_dsi2_enable(dsi2);
 
-	rockchip_drm_crtc_standby(encoder->crtc, 0);
+	if (dw_mipi_dsi2_is_cmd_mode(dsi2) || !dsi2->auto_calc_mode)
+		rockchip_drm_crtc_standby(encoder->crtc, 0);
 
 	if (dsi2->slave)
 		output_if = VOP_OUTPUT_IF_MIPI0 | VOP_OUTPUT_IF_MIPI1;
@@ -1151,7 +1156,7 @@ dw_mipi_dsi2_encoder_atomic_check(struct drm_encoder *encoder,
 
 		s->max_refresh_rate = dsi2->max_refresh_rate;
 		s->min_refresh_rate = dsi2->min_refresh_rate;
-		s->vrr_mode = ROCKCHIP_VRR_DCLK_MODE;
+		s->vrr_mode = dsi2->pdata->vrr_mode;
 	}
 
 	if (dw_mipi_dsi2_is_cmd_mode(dsi2)) {
@@ -1695,10 +1700,6 @@ static int dw_mipi_dsi2_connector_init(struct dw_mipi_dsi2 *dsi2)
 
 	drm_connector_helper_add(connector,
 				 &dw_mipi_dsi2_connector_helper_funcs);
-
-	if (dsi2->panel)
-		drm_connector_set_orientation_from_panel(connector, dsi2->panel);
-
 	ret = drm_connector_attach_encoder(connector, encoder);
 	if (ret < 0) {
 		DRM_DEV_ERROR(dev, "Failed to attach encoder: %d\n", ret);
@@ -2261,7 +2262,7 @@ static const u32 rk3588_dsi1_grf_reg_fields[MAX_FIELDS] = {
 	[IPI_FORMAT]		= GRF_REG_FIELD(0x0004,  0,  3),
 };
 
-static const struct dw_mipi_dsi2_plat_data rk3576_mipi_dsi2_plat_data = {
+static const struct dw_mipi_dsi2_plat_data rk3576_mipi_dsi2_plat_data __maybe_unused = {
 	.dsc = false,
 	.dsi0_grf_reg_fields = rk3576_dsi_grf_reg_fields,
 	.dphy_max_bit_rate_per_lane = 2500000000ULL,
@@ -2269,9 +2270,10 @@ static const struct dw_mipi_dsi2_plat_data rk3576_mipi_dsi2_plat_data = {
 	.max_vfp = 8191,
 	.max_vsync = 1023,
 	.max_vbp = 1023,
+	.vrr_mode = ROCKCHIP_VRR_VFP_MODE,
 };
 
-static const struct dw_mipi_dsi2_plat_data rk3588_mipi_dsi2_plat_data = {
+static const struct dw_mipi_dsi2_plat_data rk3588_mipi_dsi2_plat_data __maybe_unused = {
 	.dsc = true,
 	.dsi0_grf_reg_fields = rk3588_dsi0_grf_reg_fields,
 	.dsi1_grf_reg_fields = rk3588_dsi1_grf_reg_fields,
@@ -2280,6 +2282,7 @@ static const struct dw_mipi_dsi2_plat_data rk3588_mipi_dsi2_plat_data = {
 	.max_vfp = 1023,
 	.max_vsync = 1023,
 	.max_vbp = 1023,
+	.vrr_mode = ROCKCHIP_VRR_DCLK_MODE,
 };
 
 static const struct of_device_id dw_mipi_dsi2_dt_ids[] = {

@@ -196,7 +196,7 @@ struct spinand_device;
 
 /**
  * struct spinand_id - SPI NAND id structure
- * @data: buffer containing the id bytes. Currently 4 bytes large, but can
+ * @data: buffer containing the id bytes. Currently 5 bytes large, but can
  *	  be extended if required
  * @len: ID length
  */
@@ -275,6 +275,7 @@ extern const struct spinand_manufacturer gigadevice_spinand_manufacturer;
 extern const struct spinand_manufacturer gsto_spinand_manufacturer;
 extern const struct spinand_manufacturer hiksemi_spinand_manufacturer;
 extern const struct spinand_manufacturer hyf_spinand_manufacturer;
+extern const struct spinand_manufacturer icthink_spinand_manufacturer;
 extern const struct spinand_manufacturer issi_spinand_manufacturer;
 extern const struct spinand_manufacturer jsc_spinand_manufacturer;
 extern const struct spinand_manufacturer kingston_spinand_manufacturer;
@@ -286,6 +287,7 @@ extern const struct spinand_manufacturer silicongo_spinand_manufacturer;
 extern const struct spinand_manufacturer skyhigh_spinand_manufacturer;
 extern const struct spinand_manufacturer titan_spinand_manufacturer;
 extern const struct spinand_manufacturer toshiba_spinand_manufacturer;
+extern const struct spinand_manufacturer unilc_spinand_manufacturer;
 extern const struct spinand_manufacturer unim_spinand_manufacturer;
 extern const struct spinand_manufacturer unim_zl_spinand_manufacturer;
 extern const struct spinand_manufacturer winbond_spinand_manufacturer;

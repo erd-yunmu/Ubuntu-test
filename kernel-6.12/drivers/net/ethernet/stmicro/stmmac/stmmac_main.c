@@ -3588,10 +3588,6 @@ static void stmmac_free_irq(struct net_device *dev,
 			free_irq(priv->sfty_ce_irq, dev);
 		fallthrough;
 	case REQ_IRQ_ERR_SFTY_CE:
-		if (priv->lpi_irq > 0 && priv->lpi_irq != dev->irq)
-			free_irq(priv->lpi_irq, dev);
-		fallthrough;
-	case REQ_IRQ_ERR_LPI:
 		if (priv->wol_irq > 0 && priv->wol_irq != dev->irq)
 			free_irq(priv->wol_irq, dev);
 		fallthrough;
@@ -3646,24 +3642,6 @@ static int stmmac_request_irq_multi_msi(struct net_device *dev)
 				   "%s: alloc wol MSI %d (error: %d)\n",
 				   __func__, priv->wol_irq, ret);
 			irq_err = REQ_IRQ_ERR_WOL;
-			goto irq_error;
-		}
-	}
-
-	/* Request the LPI IRQ in case of another line
-	 * is used for LPI
-	 */
-	if (priv->lpi_irq > 0 && priv->lpi_irq != dev->irq) {
-		int_name = priv->int_name_lpi;
-		sprintf(int_name, "%s:%s", dev->name, "lpi");
-		ret = request_irq(priv->lpi_irq,
-				  stmmac_mac_interrupt,
-				  0, int_name, dev);
-		if (unlikely(ret < 0)) {
-			netdev_err(priv->dev,
-				   "%s: alloc lpi MSI %d (error: %d)\n",
-				   __func__, priv->lpi_irq, ret);
-			irq_err = REQ_IRQ_ERR_LPI;
 			goto irq_error;
 		}
 	}
@@ -3808,19 +3786,6 @@ static int stmmac_request_irq_single(struct net_device *dev)
 		}
 	}
 
-	/* Request the IRQ lines */
-	if (priv->lpi_irq > 0 && priv->lpi_irq != dev->irq) {
-		ret = request_irq(priv->lpi_irq, stmmac_interrupt,
-				  IRQF_SHARED, dev->name, dev);
-		if (unlikely(ret < 0)) {
-			netdev_err(priv->dev,
-				   "%s: ERROR: allocating the LPI IRQ %d (%d)\n",
-				   __func__, priv->lpi_irq, ret);
-			irq_err = REQ_IRQ_ERR_LPI;
-			goto irq_error;
-		}
-	}
-
 	/* Request the common Safety Feature Correctible/Uncorrectible
 	 * Error line in case of another line is used
 	 */
@@ -3894,11 +3859,11 @@ stmmac_setup_dma_desc(struct stmmac_priv *priv, unsigned int mtu)
 	dma_conf->dma_rx_size = priv->dma_conf.dma_rx_size;
 
 	if (!dma_conf->dma_tx_size)
-		dma_conf->dma_tx_size = dma_conf->dma_tx_size ? priv->plat->dma_tx_size :
+		dma_conf->dma_tx_size = priv->plat->dma_tx_size ? priv->plat->dma_tx_size :
 					DMA_DEFAULT_TX_SIZE;
 
 	if (!dma_conf->dma_rx_size)
-		dma_conf->dma_rx_size = dma_conf->dma_rx_size ? priv->plat->dma_rx_size :
+		dma_conf->dma_rx_size = priv->plat->dma_rx_size ? priv->plat->dma_rx_size :
 					DMA_DEFAULT_RX_SIZE;
 
 	/* Earlier check for TBS */
@@ -6432,18 +6397,6 @@ static int stmmac_dma_cap_show(struct seq_file *seq, void *v)
 		seq_printf(seq,
 			   "\tNumber of Additional MAC address registers: %d\n",
 			   priv->dma_cap.multi_addr);
-	} else if (priv->plat->has_gmac4) {
-		seq_printf(seq, "\tHash Filter: %s\n",
-			   (priv->dma_cap.hash_filter) ? "Y" : "N");
-		seq_printf(seq,
-			   "\tNumber of MAC address registers (1-31): %d\n",
-			   priv->dma_cap.multi_addr);
-		seq_printf(seq,
-			   "\tAdditional 32 MAC address registers (32-63): %s\n",
-			   priv->dma_cap.additional_32_addr ? "Y" : "N");
-		seq_printf(seq,
-			   "\tAdditional 64 MAC address registers (64-127): %s\n",
-			   priv->dma_cap.additional_64_addr ? "Y" : "N");
 	} else {
 		seq_printf(seq, "\tHash Filter: %s\n",
 			   (priv->dma_cap.hash_filter) ? "Y" : "N");
@@ -6705,9 +6658,13 @@ static int stmmac_vlan_rx_add_vid(struct net_device *ndev, __be16 proto, u16 vid
 
 	if (priv->hw->num_vlan) {
 		ret = stmmac_add_hw_vlan_rx_fltr(priv, ndev, priv->hw, proto, vid);
-		if (ret)
+		if (ret) {
+			clear_bit(vid, priv->active_vlans);
+			stmmac_vlan_update(priv, is_double);
 			goto err_pm_put;
+		}
 	}
+
 err_pm_put:
 	pm_runtime_put(priv->device);
 
@@ -6728,14 +6685,20 @@ static int stmmac_vlan_rx_kill_vid(struct net_device *ndev, __be16 proto, u16 vi
 		is_double = true;
 
 	clear_bit(vid, priv->active_vlans);
+	ret = stmmac_vlan_update(priv, is_double);
+	if (ret) {
+		set_bit(vid, priv->active_vlans);
+		goto del_vlan_error;
+	}
 
 	if (priv->hw->num_vlan) {
 		ret = stmmac_del_hw_vlan_rx_fltr(priv, ndev, priv->hw, proto, vid);
-		if (ret)
+		if (ret) {
+			set_bit(vid, priv->active_vlans);
+			stmmac_vlan_update(priv, is_double);
 			goto del_vlan_error;
+		}
 	}
-
-	ret = stmmac_vlan_update(priv, is_double);
 
 del_vlan_error:
 	pm_runtime_put(priv->device);
@@ -7242,29 +7205,6 @@ static int stmmac_hw_init(struct stmmac_priv *priv)
 					ilog2(priv->hw->multicast_filter_bins);
 		}
 
-		/*
-		 * The MAC setup callbacks claim IFF_UNICAST_FLT unconditionally,
-		 * and plat->unicast_filter_entries defaults to one whether or not
-		 * the core was synthesized with any additional MAC address
-		 * registers. On a core without them, the filter is programmed to
-		 * a register that does not exist, nothing ever matches, and the
-		 * core skips its own promiscuous fallback because the flag
-		 * promised filtering that cannot happen. Secondary unicast
-		 * addresses - a DSA user port's MAC, a macvlan - are then dropped
-		 * silently. Withdraw the promise so the core falls back instead.
-		 *
-		 * The filter starts at register 1, so only the 1-31 bank counts.
-		 * XGMAC does not report that bank in dma_cap, so leave it alone.
-		 */
-		if (!priv->plat->has_xgmac && priv->plat->has_gmac4) {
-			if (!priv->dma_cap.multi_addr) {
-				priv->hw->unicast_filter_entries = 0;
-				priv->dev->priv_flags &= ~IFF_UNICAST_FLT;
-			} else {
-				priv->hw->unicast_filter_entries = priv->dma_cap.multi_addr;
-			}
-		}
-
 		/* TXCOE doesn't work in thresh DMA mode */
 		if (priv->plat->force_thresh_dma_mode)
 			priv->plat->tx_coe = 0;
@@ -7623,7 +7563,6 @@ int stmmac_dvr_probe(struct device *device,
 
 	priv->dev->irq = res->irq;
 	priv->wol_irq = res->wol_irq;
-	priv->lpi_irq = res->lpi_irq;
 	priv->sfty_irq = res->sfty_irq;
 	priv->sfty_ce_irq = res->sfty_ce_irq;
 	priv->sfty_ue_irq = res->sfty_ue_irq;
@@ -8093,6 +8032,16 @@ int stmmac_resume(struct device *dev)
 	}
 
 	rtnl_lock();
+	if (device_may_wakeup(priv->device) && priv->plat->pmt) {
+		phylink_resume(priv->phylink);
+	} else {
+		phylink_resume(priv->phylink);
+		if (device_may_wakeup(priv->device))
+			phylink_speed_up(priv->phylink);
+	}
+	rtnl_unlock();
+
+	rtnl_lock();
 	mutex_lock(&priv->lock);
 
 	stmmac_reset_queues_param(priv);
@@ -8117,19 +8066,6 @@ int stmmac_resume(struct device *dev)
 	stmmac_enable_all_dma_irq(priv);
 
 	mutex_unlock(&priv->lock);
-
-	/*
-	 * phylink_resume() can bring the link up from a workqueue as soon as
-	 * it runs, so the MAC has to be programmed first.
-	 */
-	if (device_may_wakeup(priv->device) && priv->plat->pmt) {
-		phylink_resume(priv->phylink);
-	} else {
-		phylink_resume(priv->phylink);
-		if (device_may_wakeup(priv->device))
-			phylink_speed_up(priv->phylink);
-	}
-
 	rtnl_unlock();
 
 	netif_device_attach(ndev);

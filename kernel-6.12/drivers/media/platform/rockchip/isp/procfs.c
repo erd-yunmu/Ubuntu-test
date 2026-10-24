@@ -247,7 +247,10 @@ static void isp30_show(struct rkisp_device *dev, struct seq_file *p)
 	val = rkisp_read(dev, CSI2RX_FPN_CTRL, false);
 	seq_printf(p, "%-10s %s(0x%x)\n", "FPN", (val & 1) ? "ON" : "OFF", val);
 	val = rkisp_read(dev, ISP3X_CMSK_CTRL0, false);
-	seq_printf(p, "%-10s %s(0x%x)\n", "CMSK", (val & 1) ? "ON" : "OFF", val);
+	seq_printf(p, "%-10s %s(0x%x) win(mp:0x%x sp:0x%x)\n",
+		   "CMSK", (val & 1) ? "ON" : "OFF", val,
+		   rkisp_read(dev, ISP3X_CMSK_CTRL1, false),
+		   rkisp_read(dev, ISP3X_CMSK_CTRL2, false));
 	val = rkisp_read(dev, ISP3X_DPCC0_MODE, false);
 	seq_printf(p, "%-10s %s(0x%x)\n", "DPCC0", (val & 1) ? "ON" : "OFF", val);
 	val = rkisp_read(dev, ISP3X_DPCC1_MODE, false);
@@ -388,10 +391,14 @@ static void isp30_unite_show(struct rkisp_device *dev, struct seq_file *p)
 
 	v0 = rkisp_idx_read(dev, ISP3X_CMSK_CTRL0, ISP_UNITE_LEFT, false);
 	v1 = rkisp_idx_read(dev, ISP3X_CMSK_CTRL0, ISP_UNITE_RIGHT, false);
-	seq_printf(p, "%-10s Left %s(0x%x), Right %s(0x%x)\n",
+	seq_printf(p, "%-10s Left %s(0x%x) win(mp:0x%x sp:0x%x), Right %s(0x%x) win(mp:0x%x sp:0x%x)\n",
 		   "CMSK",
-		   (v0 & 1) ? "ON" : "OFF",
-		   v0, (v1 & 1) ? "ON" : "OFF", v1);
+		   (v0 & 1) ? "ON" : "OFF", v0,
+		   rkisp_idx_read(dev, ISP3X_CMSK_CTRL1, ISP_UNITE_LEFT, false),
+		   rkisp_idx_read(dev, ISP3X_CMSK_CTRL2, ISP_UNITE_LEFT, false),
+		   (v1 & 1) ? "ON" : "OFF", v1,
+		   rkisp_idx_read(dev, ISP3X_CMSK_CTRL1, ISP_UNITE_RIGHT, false),
+		   rkisp_idx_read(dev, ISP3X_CMSK_CTRL2, ISP_UNITE_RIGHT, false));
 	v0 = rkisp_idx_read(dev, ISP3X_DPCC0_MODE, ISP_UNITE_LEFT, false);
 	v1 = rkisp_idx_read(dev, ISP3X_DPCC0_MODE, ISP_UNITE_RIGHT, false);
 	seq_printf(p, "%-10s Left %s(0x%x), Right %s(0x%x)\n",
@@ -718,7 +725,11 @@ static void isp32_show(struct rkisp_device *dev, struct seq_file *p)
 		   rkisp_read(dev, ISP32_ISP_AWB1_GAIN_G, false),
 		   rkisp_read(dev, ISP32_ISP_AWB1_GAIN_RB, false));
 	val = rkisp_read(dev, ISP3X_CMSK_CTRL0, false);
-	seq_printf(p, "%-10s %s(0x%x)\n", "CMSK", (val & 1) ? "ON" : "OFF", val);
+	seq_printf(p, "%-10s %s(0x%x) win(mp:0x%x sp:0x%x bp:0x%x)\n",
+		   "CMSK", (val & 1) ? "ON" : "OFF", val,
+		   rkisp_read(dev, ISP3X_CMSK_CTRL1, false),
+		   rkisp_read(dev, ISP3X_CMSK_CTRL2, false),
+		   rkisp_read(dev, ISP3X_CMSK_CTRL3, false));
 	val = rkisp_read(dev, ISP3X_DPCC0_MODE, false);
 	seq_printf(p, "%-10s %s(0x%x)\n", "DPCC0", (val & 1) ? "ON" : "OFF", val);
 	val = rkisp_read(dev, ISP3X_DPCC1_MODE, false);
@@ -1017,7 +1028,11 @@ static void isp33_show(struct rkisp_device *dev, struct seq_file *p)
 		   rkisp_read(dev, ISP32_ISP_AWB1_GAIN_G, false),
 		   rkisp_read(dev, ISP32_ISP_AWB1_GAIN_RB, false));
 	val = rkisp_read(dev, ISP3X_CMSK_CTRL0, false);
-	seq_printf(p, "%-10s %s(0x%x)\n", "CMSK", (val & 1) ? "ON" : "OFF", val);
+	seq_printf(p, "%-10s %s(0x%x) win(mp:0x%x sp:0x%x bp:0x%x)\n",
+		   "CMSK", (val & 1) ? "ON" : "OFF", val,
+		   rkisp_read(dev, ISP3X_CMSK_CTRL1, false),
+		   rkisp_read(dev, ISP3X_CMSK_CTRL2, false),
+		   rkisp_read(dev, ISP3X_CMSK_CTRL3, false));
 	val = rkisp_read(dev, ISP3X_DPCC0_MODE, false);
 	seq_printf(p, "%-10s %s(0x%x)\n", "DPCC0", (val & 1) ? "ON" : "OFF", val);
 	val = rkisp_read(dev, ISP3X_DPCC1_MODE, false);
@@ -1064,8 +1079,11 @@ static void isp33_show(struct rkisp_device *dev, struct seq_file *p)
 	seq_printf(p, "%-10s %s(0x%x) bypass:%d lp_en:%d\n", "ENH", (val & 1) ? "ON" : "OFF",
 		   val, !!(val & BIT(1)), !!(val & BIT(2)));
 	val = rkisp_read(dev, ISP33_HIST_CTRL, false);
-	seq_printf(p, "%-10s %s(0x%x) bypass:%d\n", "HIST", (val & 1) ? "ON" : "OFF",
-		   val, !!(val & BIT(1)));
+	seq_printf(p, "%-10s %s(0x%x) bypass:%d block:0x%x thumb:0x%x\n",
+		   "HIST", (val & 1) ? "ON" : "OFF",
+		   val, !!(val & BIT(1)),
+		   rkisp_read(dev, ISP33_HIST_BLOCK_SIZE, false),
+		   rkisp_read(dev, ISP33_HIST_THUMB_SIZE, false));
 	val = rkisp_read(dev, ISP33_HSV_CTRL, false);
 	seq_printf(p, "%-10s %s(0x%x)\n", "HSV", (val & 1) ? "ON" : "OFF", val);
 	val = rkisp_read(dev, ISP3X_LDCH_STS, false);

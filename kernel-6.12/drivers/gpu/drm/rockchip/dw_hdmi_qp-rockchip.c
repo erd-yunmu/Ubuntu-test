@@ -354,7 +354,6 @@ struct rockchip_dw_hdmi_qp {
 	struct rockchip_drm_hdmi21_data hdmi21_data;
 	u32 force_bus_format;
 	u32 sda_falling_delay_ns;
-	bool hpd_inverted;
 
 	u8 hdrvivid_vsvdb[HDRVIVID_VSVDB_LEN];
 };
@@ -696,7 +695,7 @@ static void hdmi_select_link_config(struct rockchip_dw_hdmi_qp *hdmi,
 
 	if (!max_frl_rate || (tmdsclk < HDMI20_MAX_RATE && mode.clock < HDMI20_MAX_RATE) ||
 	    hdmi->plat_data->dw_hdmi_qp_version == DW_HDMI_QP_V2) {
-		dev_info_once(hdmi->dev, "use tmds mode\n");
+		dev_dbg(hdmi->dev, "use tmds mode\n");
 		hdmi->link_cfg.frl_mode = false;
 		return;
 	}
@@ -1257,9 +1256,6 @@ static irqreturn_t rk3588_hdmi_thread(int irq, void *dev_id)
 
 	regmap_read(hdmi->regmap, RK3588_GRF_SOC_STATUS1, &intr_stat);
 
-	if (hdmi->hpd_inverted)
-		intr_stat ^= hdmi->id ? RK3588_HDMI1_LEVEL_INT : RK3588_HDMI0_LEVEL_INT;
-
 	if (!hdmi->id) {
 		val = HIWORD_UPDATE(RK3588_HDMI0_HPD_INT_CLR, RK3588_HDMI0_HPD_INT_CLR);
 		if (intr_stat & RK3588_HDMI0_LEVEL_INT)
@@ -1676,8 +1672,6 @@ static int rockchip_hdmi_parse_dt(struct rockchip_dw_hdmi_qp *hdmi)
 
 	if (of_property_read_u32(np, "rockchip,sda-falling-delay-ns", &hdmi->sda_falling_delay_ns))
 		hdmi->sda_falling_delay_ns = 0;
-
-	hdmi->hpd_inverted = of_property_read_bool(np, "hpd-inverted");
 
 	return ret;
 }
@@ -3746,7 +3740,8 @@ static const struct drm_prop_enum_list next_tfr_list[] = {
 };
 
 static void dw_hdmi_rockchip_attach_properties(struct drm_connector *connector, unsigned int color,
-					       int version, void *data, bool allm_en)
+					       unsigned int colorimetry, int version, void *data,
+					       bool allm_en)
 {
 	struct rockchip_dw_hdmi_qp *hdmi = (struct rockchip_dw_hdmi_qp *)data;
 	struct drm_property *prop;
@@ -3757,6 +3752,7 @@ static void dw_hdmi_rockchip_attach_properties(struct drm_connector *connector, 
 
 	hdmi->bus_format = color;
 	hdmi->prev_bus_format = color;
+	hdmi->enc_out_encoding = colorimetry;
 
 	if (hdmi->hdmi_output == RK_IF_FORMAT_YCBCR422) {
 		if (hdmi->colordepth == 12)
@@ -3837,12 +3833,8 @@ static void dw_hdmi_rockchip_attach_properties(struct drm_connector *connector, 
 		drm_object_attach_property(&connector->base, prop, 0);
 	}
 
-	/*
-	 * To interface with user space, the name of gaming_vrr_enable
-	 * will not be changed for the time being.
-	 */
 	prop = drm_property_create_enum(connector->dev, 0,
-					"gaming_vrr_enable", generic_enable_list,
+					"tfrsync_vrr_enable", generic_enable_list,
 					ARRAY_SIZE(generic_enable_list));
 	if (prop) {
 		hdmi->tfrsync_vrr_enable = prop;
@@ -4606,9 +4598,6 @@ static enum drm_connector_status dw_hdmi_rk3588_read_hpd(struct dw_hdmi_qp *dw_h
 	struct rockchip_dw_hdmi_qp *hdmi = (struct rockchip_dw_hdmi_qp *)data;
 
 	regmap_read(hdmi->regmap, RK3588_GRF_SOC_STATUS1, &val);
-
-	if (hdmi->hpd_inverted)
-		val ^= hdmi->id ? RK3588_HDMI1_LEVEL_INT : RK3588_HDMI0_LEVEL_INT;
 
 	if (!hdmi->id) {
 		if (val & RK3588_HDMI0_LEVEL_INT) {

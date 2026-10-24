@@ -140,11 +140,11 @@
 	status = "okay";
 };
 
-&combphy1_usq {
+&combphy1 {
 	status = "okay";
 };
 
-&combphy2_psq {
+&combphy2 {
 	status = "okay";
 };
 
@@ -613,12 +613,12 @@
 	status = "okay";
 };
 
-&u2phy0_host {
+&usb2phy0_host {
 	phy-supply = <&vcc5v0_usb30_host>;
 	status = "okay";
 };
 
-&u2phy0_otg {
+&usb2phy0_otg {
 	phy-supply = <&vcc5v0_otg_vbus>;
 	status = "okay";
 };
@@ -636,11 +636,11 @@
 	status = "okay";
 };
 
-&u2phy1_host {
+&usb2phy1_host {
 	status = "okay";
 };
 
-&u2phy1_otg {
+&usb2phy1_otg {
 	phy-supply = <&vcc5v0_usb20_host>;
 	status = "okay";
 };
@@ -654,8 +654,8 @@
 };
 
 /* MULTI_PHY0 For SATA0, USB3.0 OTG Only USB2.0 */
-&usbdrd_dwc3 {
-	phys = <&u2phy0_otg>;
+&usb_host0_xhci {
+	phys = <&usb2phy0_otg>;
 	phy-names = "usb2-phy";
 	extcon = <&usb2phy0>;
 	maximum-speed = "high-speed";
@@ -668,7 +668,7 @@
 };
 
 /* USB3.0 Host */
-&usbhost_dwc3 {
+&usb_host1_xhci {
 	status = "okay";
 };
 

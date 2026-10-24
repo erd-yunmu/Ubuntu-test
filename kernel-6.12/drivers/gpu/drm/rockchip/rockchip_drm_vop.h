@@ -11,6 +11,7 @@
 #include <drm/drm_modes.h>
 
 #include "rockchip_drm_drv.h"
+#include "rockchip_drm_crc.h"
 
 /*
  * major: IP major version, used for IP structure
@@ -289,9 +290,11 @@ struct vop_afbc {
 	struct vop_reg dsp_offset;
 	struct vop_reg transform_offset;
 	struct vop_reg hdr_ptr;
+	struct vop_reg hdr_ptr_high;
 	struct vop_reg half_block_en;
 	struct vop_reg pld_offset_en;
 	struct vop_reg pld_ptr_offset;
+	struct vop_reg pld_ptr_offset_high;
 	struct vop_reg pld_range_en;
 	struct vop_reg pld_ptr_range;
 	struct vop_reg compress_mode;
@@ -929,6 +932,7 @@ struct vop2_cluster_regs {
 	struct vop_reg dci_dma_rid;
 	struct vop_reg dci_dma_rlen;
 	struct vop_reg dci_dma_mst;
+	struct vop_reg dci_dma_mst_high;
 	struct vop_reg debug_point_h;
 	struct vop_reg debug_point_v;
 	struct vop_reg debug_mode;
@@ -994,9 +998,12 @@ struct vop2_win_regs {
 	struct vop_reg multi_grid_en; /* for msmart layer */
 	struct vop_reg multi_grid_num; /* for msmart layer */
 	struct vop_reg multi_grid_mst; /* for msmart layer */
+	struct vop_reg multi_grid_mst_high; /* for msmart layer */
 	struct vop_reg frm_reset_en;
 	struct vop_reg yrgb_mst;
+	struct vop_reg yrgb_mst_high;
 	struct vop_reg uv_mst;
+	struct vop_reg uv_mst_high;
 	struct vop_reg yrgb_vir;
 	struct vop_reg uv_vir;
 	struct vop_reg yuv_clip;
@@ -1024,6 +1031,43 @@ struct vop2_win_regs {
 	struct vop_reg win_cfg_done;
 	struct vop_reg crc_check_en;
 	struct vop_reg crc_check_val;
+};
+
+/**
+ * struct vop2_crc_regs - CRC register field descriptors for one CRC block.
+ *
+ * Each CRC block (CRTC or ESMART layer) has an identical register layout;
+ * only the base address differs.  Fields are accessed via VOP_CRC_SET()
+ * and VOP_CRC_SET_I() (for indexed per-region fields), using the standard
+ * &struct vop_reg mechanism.
+ */
+struct vop2_crc_regs {
+	struct vop_reg region_chkout;
+	struct vop_reg region_key;
+	struct vop_reg region_key_mode;
+	struct vop_reg region_freeze;
+	struct vop_reg region_err;
+	struct vop_reg key_value_en;
+	struct vop_reg global_chkout;
+	struct vop_reg global_freeze;
+	struct vop_reg freeze_num;
+	struct vop_reg int_en;
+	struct vop_reg int_clr;
+	struct vop_reg int_status;
+	struct vop_reg int_raw_status;
+	struct vop_reg global_value;
+	/* per-region registers (indexed 0..ROCKCHIP_CRC_REGION_NR-1) */
+	struct vop_reg coord0[ROCKCHIP_CRC_REGION_NR];
+	struct vop_reg coord1[ROCKCHIP_CRC_REGION_NR];
+	struct vop_reg expect[ROCKCHIP_CRC_REGION_NR];
+	struct vop_reg key_tie;
+	struct vop_reg key_value[ROCKCHIP_CRC_KEY_VALUE_NR];
+	struct vop_reg region_value[ROCKCHIP_CRC_REGION_NR];
+	/* interrupt status bit encoding */
+	u8 irq_stride;
+	u8 err_bit_off;
+	u8 freeze_bit_off;
+	u8 global_freeze_bit;
 };
 
 struct vop2_video_port_regs {
@@ -1084,6 +1128,7 @@ struct vop2_video_port_regs {
 	struct vop_reg hdr_lut_update_en;
 	struct vop_reg hdr_lut_mode;
 	struct vop_reg hdr_lut_mst;
+	struct vop_reg hdr_lut_mst_high;
 	struct vop_reg hdr_lut_fetch_done;
 	struct vop_reg hdrvivid_en;
 	struct vop_reg hdrvivid_bypass_en;
@@ -1139,6 +1184,7 @@ struct vop2_video_port_regs {
 	struct vop_reg cubic_lut_en;
 	struct vop_reg cubic_lut_update_en;
 	struct vop_reg cubic_lut_mst;
+	struct vop_reg cubic_lut_mst_high;
 
 	/* cru */
 	struct vop_reg dclk_core_div;
@@ -1220,6 +1266,7 @@ struct vop2_video_port_regs {
 	struct vop_reg crc_val;
 	struct vop_reg crc_check_en;
 	struct vop_reg crc_check_val;
+	const struct vop2_crc_regs *crc;
 
 	/* clk calc*/
 	struct vop_reg calc_clk_en;
@@ -1266,6 +1313,7 @@ struct vop2_dovi_regs {
 
 	/* core1 and core2 */
 	struct vop_reg lut_mst;
+	struct vop_reg lut_mst_high;
 	struct vop_reg lut_update;
 
 	/* core3 */
@@ -1320,7 +1368,9 @@ struct vop2_wb_regs {
 	struct vop_reg r2y_en;
 	struct vop_reg y2r_en;
 	struct vop_reg yrgb_mst;
+	struct vop_reg yrgb_mst_high;
 	struct vop_reg uv_mst;
+	struct vop_reg uv_mst_high;
 	struct vop_reg vp_id;
 	struct vop_reg fifo_throd;
 	struct vop_reg scale_x_factor;
@@ -1398,6 +1448,7 @@ struct vop2_win_data {
 	struct vop_rect max_output;
 	const struct vop_reg crc_enable;
 	const uint32_t crc_value_offset;
+	const struct vop2_crc_regs *crc;
 
 	/*
 	 * vertical/horizontal scale up/down filter mode
@@ -1421,6 +1472,7 @@ struct vop2_win_data {
 	/* capacity of msmart layer */
 	const uint32_t max_grids;
 	const uint32_t max_grids_per_row;
+	const uint32_t min_grids;
 };
 
 struct vop2_dovi_core_data {
@@ -1464,6 +1516,8 @@ struct vop2_wb_data {
 	uint32_t num_plane_source;
 	const struct drm_prop_enum_list *plane_source;
 	uint32_t fifo_depth;
+	uint32_t csc_coe_offset;
+	uint32_t csc_pixel_depth;
 };
 
 struct vop3_ovl_mix_regs {
@@ -1505,7 +1559,6 @@ struct vop2_video_port_data {
 	const u8 cursor_dly;
 	const u8 hdr_cgc_layer_num;
 	const uint8_t csc_coe_bits;
-	const uint8_t reg_done_bit;
 	const uint32_t bcsh_r2y_csc_coe_offset;
 	const uint32_t bcsh_y2r_csc_coe_offset;
 	const struct vop_intr *intr;
@@ -1633,7 +1686,6 @@ struct vop_data {
 struct vop2_ctrl {
 	struct vop_reg cfg_done_en;
 	struct vop_reg wb_cfg_done;
-	struct vop_reg win_cfg_done;
 	struct vop_reg auto_gating_en;
 	struct vop_reg aclk_pre_auto_gating_en;
 	struct vop_reg dma_finish_mode;
@@ -1662,6 +1714,7 @@ struct vop2_ctrl {
 	struct vop_reg metadata_rid;
 	struct vop_reg metadata_size;
 	struct vop_reg metadata_mst;
+	struct vop_reg metadata_mst_high;
 	struct vop_reg dsp_vs_t_sel;
 	struct vop_reg auto_cs_en;
 	struct vop_reg auto_cs_mode;
@@ -1861,6 +1914,7 @@ struct vop2_data {
 	bool delayed_pd;
 	uint8_t esmart_lb_mode_num;
 	uint8_t crc_sources_num;
+	uint8_t crc_region_nr;
 	const struct vop2_esmart_lb_map *esmart_lb_mode_map;
 	const struct vop_intr *axi_intr;
 	const struct vop2_ctrl *ctrl;

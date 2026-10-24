@@ -490,9 +490,6 @@ struct tcpm_port {
 	/* port belongs to a self powered device */
 	bool self_powered;
 
-	/* Shorten CC/PD debounce when the port sets faster-pd-negotiation */
-	bool faster_pd_negotiation;
-
 	/* Sink FRS */
 	enum frs_typec_current new_source_frs_current;
 
@@ -4997,10 +4994,10 @@ static void run_state_machine(struct tcpm_port *port)
 		    (port->cc1 != TYPEC_CC_OPEN &&
 		     port->cc2 == TYPEC_CC_OPEN))
 			tcpm_set_state(port, SNK_DEBOUNCED,
-				       port->faster_pd_negotiation ? 100 : PD_T_CC_DEBOUNCE);
+				       PD_T_CC_DEBOUNCE);
 		else if (tcpm_port_is_disconnected(port))
 			tcpm_set_state(port, SNK_UNATTACHED,
-				       port->faster_pd_negotiation ? 100 : PD_T_PD_DEBOUNCE);
+				       PD_T_PD_DEBOUNCE);
 		else if (tcpm_port_is_sink(port))
 			tcpm_set_state(port, SNK_DEBOUNCED, 0);
 		break;
@@ -5141,7 +5138,7 @@ static void run_state_machine(struct tcpm_port *port)
 		if (port->vbus_never_low) {
 			port->vbus_never_low = false;
 			tcpm_set_state(port, SNK_SOFT_RESET,
-				       port->faster_pd_negotiation ? 100 : PD_T_SINK_WAIT_CAP);
+				       PD_T_SINK_WAIT_CAP);
 		} else {
 			if (!port->self_powered)
 				upcoming_state = SNK_WAIT_CAPABILITIES_TIMEOUT;
@@ -5769,7 +5766,7 @@ static void run_state_machine(struct tcpm_port *port)
 	case PORT_RESET_WAIT_OFF:
 		tcpm_set_state(port,
 			       tcpm_default_state(port),
-			       port->vbus_present ? (port->faster_pd_negotiation ? 100 : PD_T_PS_SOURCE_OFF) : 0);
+			       port->vbus_present ? PD_T_PS_SOURCE_OFF : 0);
 		break;
 
 	/* AMS intermediate state */
@@ -7193,7 +7190,6 @@ static int tcpm_fw_get_caps(struct tcpm_port *port, struct fwnode_handle *fwnode
 
 	port->port_type = port->typec_caps.type;
 	port->pd_supported = !fwnode_property_read_bool(fwnode, "pd-disable");
-	port->faster_pd_negotiation = fwnode_property_read_bool(fwnode, "faster-pd-negotiation");
 
 	ret = fwnode_property_read_u32(fwnode, "pd-revision", &pd_revision);
 	port->typec_caps.pd_revision = !ret ? pd_revision & 0xffff : 0x0300;
@@ -7730,7 +7726,7 @@ struct tcpm_port *tcpm_register_port(struct device *dev, struct tcpc_dev *tcpc)
 	port->partner_desc.identity = &port->partner_ident;
 
 	port->role_sw = fwnode_usb_role_switch_get(tcpc->fwnode);
-	if (IS_ERR_OR_NULL(port->role_sw))
+	if (!port->role_sw)
 		port->role_sw = usb_role_switch_get(port->dev);
 	if (IS_ERR(port->role_sw)) {
 		err = PTR_ERR(port->role_sw);

@@ -345,42 +345,53 @@ static struct dma_buf *rkcif_shm_alloc(struct rkisp_thunderboot_shmem *shmem)
 int rkcif_alloc_reserved_mem_buf(struct rkcif_device *dev, struct rkcif_rx_buffer *buf)
 {
 	struct rkcif_dummy_buffer *dummy = &buf->dummy;
-	u32 reserved_mem = 0;
 	struct dma_buf_attachment *dba;
 	struct sg_table *sgt;
 	dma_addr_t dma;
+	dma_addr_t buf_start;
+	u32 aligned_size;
+	u32 max_bufs;
 	int ret = 0;
-	u32 dma_addr = 0;
 
-	if (dev->pre_buf_num)
-		reserved_mem = SHARED_MEM_RESERVED_HEAD_SIZE;
 	/*
-	 * Calculate buffer start address. Use PAGE_ALIGN for dummy->size
-	 * to ensure each buffer starts at a page-aligned boundary.
-	 * resmem_pa is already page-aligned from dev.c initialization.
-	 * This is critical for free_reserved_area() which requires
-	 * page-aligned addresses to avoid memory leaks.
+	 * resmem_buf_pa already skips SHARED_MEM_RESERVED_HEAD_SIZE.
+	 * Stride must be PAGE_ALIGN'd so each buffer starts on a page
+	 * boundary (required by free_reserved_area()).
 	 */
-	dummy->dma_addr = reserved_mem + dev->resmem_pa +
-			   PAGE_ALIGN(dummy->size) * buf->buf_idx;
+	aligned_size = PAGE_ALIGN(dummy->size);
+	if (!aligned_size || aligned_size > dev->resmem_buf_size)
+		return -EINVAL;
 
-	if (dummy->dma_addr + PAGE_ALIGN(dummy->size) > dev->resmem_pa + dev->resmem_size) {
+	/*
+	 * Use integer quota instead of end-address compare alone:
+	 * start == resmem_buf_pa + resmem_buf_size is already OOB, but a
+	 * mistaken "start > end" check would still accept that index.
+	 */
+	max_bufs = dev->resmem_buf_size / aligned_size;
+	if (buf->buf_idx >= max_bufs) {
+		buf_start = dev->resmem_buf_pa +
+			    (dma_addr_t)aligned_size * buf->buf_idx;
+		dummy->dma_addr = buf_start;
 		v4l2_err(&dev->v4l2_dev,
-			 "reserved memory overflow: dma_addr=0x%pa size=0x%x resmem_pa=0x%pa resmem_size=0x%zx\n",
+			 "reserved memory overflow: dma_addr=0x%pa size=0x%x resmem_buf_pa=0x%pa resmem_buf_size=0x%zx max_bufs=%u idx=%d\n",
 			 &dummy->dma_addr, dummy->size,
-			 &dev->resmem_pa, dev->resmem_size);
+			 &dev->resmem_buf_pa, dev->resmem_buf_size,
+			 max_bufs, buf->buf_idx);
 		return -EINVAL;
 	}
+
+	dummy->dma_addr = dev->resmem_buf_pa +
+			  (dma_addr_t)aligned_size * buf->buf_idx;
 
 	buf->dbufs.dma = dummy->dma_addr;
 	buf->dbufs.is_resmem = true;
 	buf->shmem.shm_start = dummy->dma_addr;
-	buf->shmem.shm_size = PAGE_ALIGN(dummy->size);
+	buf->shmem.shm_size = aligned_size;
 
 	v4l2_info(&dev->v4l2_dev,
 		  "alloc buf[%d]: orig_size=0x%x aligned_size=0x%x start=0x%pa\n",
 		  buf->buf_idx, dummy->size,
-		  buf->shmem.shm_size, &buf->shmem.shm_start);
+		  aligned_size, &buf->shmem.shm_start);
 
 	dummy->dbuf = rkcif_shm_alloc(&buf->shmem);
 	buf->dbufs.dbuf = dummy->dbuf;
@@ -400,8 +411,6 @@ int rkcif_alloc_reserved_mem_buf(struct rkcif_device *dev, struct rkcif_rx_buffe
 		dma = sg_dma_address(sgt->sgl);
 		get_dma_buf(dummy->dbuf);
 		dummy->dma_addr = dma;
-	} else {
-		dummy->dma_addr = dma_addr;
 	}
 	if (dummy->is_need_vaddr) {
 		struct iosys_map map;
@@ -499,6 +508,36 @@ void rkcif_free_reserved_mem_area(struct rkcif_device *dev, struct rkcif_rx_buff
 			  &start, &end,
 			  (unsigned long long)(end - start) / PAGE_SIZE);
 	}
+#endif
+}
+
+void rkcif_free_resmem_head(struct rkcif_device *dev)
+{
+#ifdef CONFIG_VIDEO_ROCKCHIP_THUNDER_BOOT_ISP
+	phys_addr_t start, end;
+
+	if (dev->is_resmem_head_freed || !SHARED_MEM_RESERVED_HEAD_SIZE ||
+	    !dev->resmem_pa ||
+	    dev->resmem_size < SHARED_MEM_RESERVED_HEAD_SIZE)
+		return;
+
+	/*
+	 * Always free a fixed HEAD from current resmem_pa. Do not use
+	 * resmem_buf_pa here: HDR thunderboot may have advanced it.
+	 */
+	start = dev->resmem_pa;
+	end = start + SHARED_MEM_RESERVED_HEAD_SIZE;
+	if (dev->resmem_addr) {
+		dma_unmap_single(dev->dev, dev->resmem_addr,
+				 sizeof(struct rkisp_thunderboot_resmem_head),
+				 DMA_BIDIRECTIONAL);
+		dev->resmem_addr = 0;
+	}
+	free_reserved_area(phys_to_virt(start), phys_to_virt(end),
+			   -1, "rkisp_thunderboot_head");
+	dev->resmem_size -= SHARED_MEM_RESERVED_HEAD_SIZE;
+	dev->resmem_pa = end;
+	dev->is_resmem_head_freed = true;
 #endif
 }
 

@@ -84,11 +84,11 @@
 	status = "okay";
 };
 
-&combphy1_usq {
+&combphy1 {
 	status = "okay";
 };
 
-&combphy2_psq {
+&combphy2 {
 	status = "okay";
 };
 
@@ -403,6 +403,6 @@
 	status = "okay";
 };
 
-&usbdrd_dwc3 {
+&usb_host0_xhci {
 	extcon = <&usb2phy0>;
 };

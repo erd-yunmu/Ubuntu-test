@@ -235,11 +235,12 @@ enum soc_type {
 	RV1126,
 };
 
+/* Unit: MHz */
 enum phy_max_rate {
-	MAX_1GHZ = 1000 * HZ_PER_MHZ,
-	MAX_1_5GHZ = 1500 * HZ_PER_MHZ,
-	MAX_2_5GHZ = 2500 * HZ_PER_MHZ,
-	MAX_4_5GHZ = 4500 * HZ_PER_MHZ,
+	MAX_1GHZ = 1000,
+	MAX_1_5GHZ = 1500,
+	MAX_2_5GHZ = 2500,
+	MAX_4_5GHZ = 4500,
 };
 
 struct inno_video_phy_reg {
@@ -381,15 +382,15 @@ struct inno_mipi_dphy_timing inno_mipi_dphy_timing_table_max_4_5ghz[] = {
 	{ 700, 0x04, 0x7e, 0x16, 0x07, 0x78, 0x78, 0x0b},
 	{ 800, 0x04, 0x7c, 0x16, 0x09, 0x70, 0x70, 0x0b},
 	{ 900, 0x04, 0x7c, 0x16, 0x09, 0x40, 0x40, 0x13},
-	{1000, 0x07, 0x70, 0x20, 0x09, 0x01, 0x01, 0x13},
+	{1000, 0x07, 0x70, 0x27, 0x10, 0x01, 0x78, 0x1a},
 	{1200, 0x07, 0x70, 0x2a, 0x12, 0x01, 0x01, 0x13},
 	{1400, 0x09, 0x60, 0x2b, 0x12, 0x02, 0x02, 0x15},
 	{1600, 0x11, 0x40, 0x3b, 0x12, 0x02, 0x02, 0x15},
 	{1800, 0x11, 0x08, 0x3b, 0x14, 0x08, 0x08, 0x15},
-	{2000, 0x11, 0x41, 0x45, 0x16, 0x41, 0x41, 0x18},
+	{2000, 0x11, 0x41, 0x50, 0x20, 0x0c, 0x20, 0x30},
 	{2200, 0x11, 0x41, 0x45, 0x19, 0x41, 0x41, 0x18},
 	{2400, 0x11, 0x06, 0x58, 0x1d, 0x0c, 0x0c, 0x1b},
-	{2500, 0x11, 0x06, 0x58, 0x1d, 0x0c, 0x0c, 0x1b},
+	{2500, 0x11, 0x06, 0x63, 0x27, 0x05, 0x0c, 0x34},
 	{2600, 0x11, 0x06, 0x58, 0x1d, 0x0c, 0x0c, 0x1b},
 	{2800, 0x16, 0x30, 0x63, 0x21, 0x61, 0x61, 0x1f},
 	{3000, 0x16, 0x61, 0x63, 0x25, 0x05, 0x05, 0x25},
@@ -445,8 +446,8 @@ inno_dsidphy_max_2_5ghz_or_4_5ghz_pll_calc_rate(struct inno_dsidphy *inno,
 						unsigned long long rate)
 {
 	u64 prate = clk_get_rate(inno->ref_clk);
-	u64 max_rate = inno->pdata->max_rate;
-	u64 max_vco = (inno->pdata->max_rate == MAX_4_5GHZ ? 5000 : 3000) * HZ_PER_MHZ;
+	u64 max_rate = (u64)inno->pdata->max_rate * HZ_PER_MHZ;
+	u64 max_vco = (inno->pdata->max_rate == MAX_4_5GHZ ? 5000ULL : 3000ULL) * HZ_PER_MHZ;
 	u64 min_vco = 1000 * HZ_PER_MHZ;
 	u64 fvco;
 	u64 best_freq = 0;
@@ -527,8 +528,6 @@ inno_dsidphy_max_2_5ghz_or_4_5ghz_pll_calc_rate(struct inno_dsidphy *inno,
 		inno->pll.postdiv = best_postdiv;
 		inno->pll.rate = best_freq;
 		inno->pll.lowfre_en = best_postdiv ? true : false;
-		dev_dbg(inno->dev, "best_prediv:%d best_fbdiv:%d best_postdiv:%d fvco:%llu\n",
-			best_prediv, best_fbdiv, best_postdiv, fvco);
 	}
 
 	return best_freq;
@@ -539,7 +538,7 @@ inno_dsidphy_max_1ghz_or_1_5ghz_pll_calc_rate(struct inno_dsidphy *inno,
 					      unsigned long long rate)
 {
 	unsigned long prate = clk_get_rate(inno->ref_clk);
-	unsigned long long max_rate = inno->pdata->max_rate;
+	unsigned long long max_rate = (u64)inno->pdata->max_rate * HZ_PER_MHZ;
 	unsigned long long best_freq = 0;
 	unsigned long long fref, fout;
 	u8 min_prediv, max_prediv;
@@ -667,7 +666,7 @@ static void inno_mipi_dphy_max_2_5ghz_pll_enable(struct inno_dsidphy *inno)
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x08,
 			PLL_POST_DIV_ENABLE_MASK, PLL_POST_DIV_ENABLE(inno->pll.lowfre_en));
 	if (inno->pll.lowfre_en)
-		phy_update_bits(inno, REGISTER_PART_ANALOG, 0x2a,
+		phy_update_bits(inno, REGISTER_PART_ANALOG, 0x1e,
 				REG_POSTDIV_MASK, REG_POSTDIV(inno->pll.postdiv));
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x0b,
 			CLOCK_LANE_VOD_RANGE_SET_MASK,
@@ -1149,6 +1148,9 @@ static int inno_dsidphy_configure(struct phy *phy,
 
 	cfg->hs_clk_rate = inno->pll.rate;
 	opts->mipi_dphy.hs_clk_rate = inno->pll.rate;
+
+	dev_dbg(inno->dev, "prediv:%u, fbdiv:%u, postdiv:%d, lowfre_en:%d\n",
+		inno->pll.prediv, inno->pll.fbdiv, inno->pll.postdiv, inno->pll.lowfre_en);
 
 	return 0;
 }

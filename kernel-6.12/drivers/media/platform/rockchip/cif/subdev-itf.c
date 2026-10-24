@@ -100,8 +100,17 @@ static void sditf_buffree_work(struct work_struct *work)
 					  struct rkcif_rx_buffer, list_free);
 		if (rx_buf) {
 			list_del(&rx_buf->list_free);
-			rkcif_free_reserved_mem_buf(priv->cif_dev, rx_buf);
-			rkcif_free_reserved_mem_area(priv->cif_dev, rx_buf);
+			/*
+			 * rkcif_free_reserved_mem_buf() already returns
+			 * early if !is_allocated, but
+			 * rkcif_free_reserved_mem_area() does not, and
+			 * the buf helper clears is_allocated on success.
+			 * Guard both so reserved area is not freed twice.
+			 */
+			if (rx_buf->dummy.is_allocated) {
+				rkcif_free_reserved_mem_buf(priv->cif_dev, rx_buf);
+				rkcif_free_reserved_mem_area(priv->cif_dev, rx_buf);
+			}
 			memset(rx_buf, 0, sizeof(*rx_buf));
 		}
 	}
@@ -330,10 +339,10 @@ static int sditf_init_buf(struct sditf_priv *priv)
 	if (priv->hdr_cfg.hdr_mode == HDR_X2) {
 		if (priv->mode.rdbk_mode == RKISP_VICAP_RDBK_AUTO) {
 			if (cif_dev->is_thunderboot)
-				cif_dev->resmem_size /= 2;
+				cif_dev->resmem_buf_size /= 2;
 			ret = rkcif_init_rx_buf(&cif_dev->stream[0], priv->buf_num);
 			if (cif_dev->is_thunderboot)
-				cif_dev->resmem_pa += cif_dev->resmem_size;
+				cif_dev->resmem_buf_pa += cif_dev->resmem_buf_size;
 			ret |= rkcif_init_rx_buf(&cif_dev->stream[1], priv->buf_num);
 		} else {
 			ret = rkcif_init_rx_buf(&cif_dev->stream[0], priv->buf_num);
@@ -343,13 +352,13 @@ static int sditf_init_buf(struct sditf_priv *priv)
 	} else if (priv->hdr_cfg.hdr_mode == HDR_X3) {
 		if (priv->mode.rdbk_mode == RKISP_VICAP_RDBK_AUTO) {
 			if (cif_dev->is_thunderboot)
-				cif_dev->resmem_size /= 3;
+				cif_dev->resmem_buf_size /= 3;
 			ret = rkcif_init_rx_buf(&cif_dev->stream[0], priv->buf_num);
 			if (cif_dev->is_thunderboot)
-				cif_dev->resmem_pa += cif_dev->resmem_size;
+				cif_dev->resmem_buf_pa += cif_dev->resmem_buf_size;
 			ret |= rkcif_init_rx_buf(&cif_dev->stream[1], priv->buf_num);
 			if (cif_dev->is_thunderboot)
-				cif_dev->resmem_pa += cif_dev->resmem_size;
+				cif_dev->resmem_buf_pa += cif_dev->resmem_buf_size;
 			ret |= rkcif_init_rx_buf(&cif_dev->stream[2], priv->buf_num);
 		} else {
 			ret = rkcif_init_rx_buf(&cif_dev->stream[0], priv->buf_num);
@@ -388,12 +397,17 @@ static void sditf_free_buf(struct sditf_priv *priv)
 	} else {
 		rkcif_free_rx_buf(&cif_dev->stream[0], cif_dev->stream[0].rx_buf_num);
 	}
+
 	if (cif_dev->is_thunderboot) {
 		cif_dev->wait_line_cache = 0;
 		cif_dev->wait_line = 0;
 		cif_dev->wait_line_bak = 0;
 		cif_dev->is_thunderboot = false;
+		cif_dev->is_rdbk_to_online = false;
+		priv->is_free_thunderboot_buf = false;
+		priv->free_buf_delay_cnt = 0;
 	}
+	rkcif_free_resmem_head(cif_dev);
 	priv->is_buf_init = false;
 	if (cif_dev->switch_info.is_use_switch)
 		cif_dev->switch_info.is_init_buf = false;
@@ -493,14 +507,18 @@ static long sditf_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		    priv->cif_dev->chip_id < CHIP_RV1103B_CIF)
 			return -EINVAL;
 
-		ret = v4l2_subdev_call(cif_dev->terminal_sensor.sd,
-				       core, ioctl,
-				       RKMODULE_GET_SYNC_MODE,
-				       &sync_type);
-		if (ret || sync_type == NO_SYNC_MODE)
+		if (!cif_dev->terminal_sensor.sd) {
 			mode->input.multi_sync = 0;
-		else
-			mode->input.multi_sync = 1;
+		} else {
+			ret = v4l2_subdev_call(cif_dev->terminal_sensor.sd,
+					       core, ioctl,
+					       RKMODULE_GET_SYNC_MODE,
+					       &sync_type);
+			if (ret || sync_type == NO_SYNC_MODE)
+				mode->input.multi_sync = 0;
+			else
+				mode->input.multi_sync = 1;
+		}
 		memcpy(&priv->mode_src, mode, sizeof(*mode));
 
 		if (cif_dev->switch_info.is_use_switch)
@@ -632,9 +650,9 @@ static long sditf_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		return 0;
 	case RKISP_VICAP_CMD_MULTI_ONLINE:
 		if (*(int *)arg)
-			priv->is_multi_online = true;
+			WRITE_ONCE(priv->is_multi_online, true);
 		else
-			priv->is_multi_online = false;
+			WRITE_ONCE(priv->is_multi_online, false);
 		return 0;
 	default:
 		break;
@@ -1054,7 +1072,13 @@ void sditf_change_to_online(struct sditf_priv *priv)
 {
 	struct rkcif_device *cif_dev = priv->cif_dev;
 	struct rkcif_stream *cur_stream = NULL;
-	 int stream_cnt, i;
+	int stream_cnt, i;
+
+	if (READ_ONCE(priv->is_stopping)) {
+		v4l2_dbg(3, rkcif_debug, &cif_dev->v4l2_dev,
+			 "change_to_online skip, stopping\n");
+		return;
+	}
 
 	priv->mode = priv->mode_src;
 	if (priv->mode.rdbk_mode != RKISP_VICAP_ONLINE_UNITE &&
@@ -1090,6 +1114,8 @@ void sditf_change_to_online(struct sditf_priv *priv)
 			cur_stream = &cif_dev->stream[i];
 			cur_stream->cur_stream_mode = RKCIF_STREAM_MODE_TOISP;
 		}
+		if (!cif_dev->is_rtt_suspend)
+			rkcif_free_resmem_head(cif_dev);
 	}
 }
 
@@ -1114,11 +1140,13 @@ void sditf_disable_immediately(struct sditf_priv *priv)
 				sditf_channel_disable(priv, 1);
 		}
 	}
-	if (priv->cif_dev->switch_info.is_use_switch)
-		priv->cif_dev->switch_info.is_active = false;
+	/*
+	 * Do not set is_toisp_off here: toisp registers take effect on next FS.
+	 * Online toisp GPIO/is_active are aligned in sditf_enable_immediately.
+	 */
 }
 
-static void sditf_enable_immediately(struct sditf_priv *priv)
+static void sditf_toisp_hw_enable(struct sditf_priv *priv)
 {
 	if (priv->toisp_inf.link_mode == TOISP0) {
 		if (priv->cif_dev->chip_id >= CHIP_RV1103B_CIF)
@@ -1139,11 +1167,96 @@ static void sditf_enable_immediately(struct sditf_priv *priv)
 				sditf_channel_enable(priv, 1);
 		}
 	}
-	if (priv->cif_dev->switch_info.is_use_switch) {
-		rkcif_switch_change(priv->cif_dev, !!priv->cif_dev->switch_info.gpio_val);
-		priv->cif_dev->switch_info.is_active = true;
+}
+
+/* Bind switch GPIO/is_active with toisp enable to avoid FE ping-pong race. */
+static void sditf_switch_before_toisp(struct rkcif_device *cif_dev, int gpio_val)
+{
+	struct rkcif_device *partner;
+
+	if (!cif_dev->switch_info.is_use_switch)
+		return;
+
+	mutex_lock(&cif_dev->hw_dev->switch_mutex_lock[cif_dev->switch_info.host_idx]);
+	rkcif_switch_change(cif_dev, !!gpio_val);
+	cif_dev->switch_info.is_active = true;
+	partner = cif_dev->switch_info.switch_dev;
+	if (partner)
+		partner->switch_info.is_active = false;
+	mutex_unlock(&cif_dev->hw_dev->switch_mutex_lock[cif_dev->switch_info.host_idx]);
+
+	v4l2_dbg(3, rkcif_debug, &cif_dev->v4l2_dev,
+		 "switch before toisp, gpio %d\n", gpio_val);
+}
+
+static void sditf_enable_toisp(struct sditf_priv *priv)
+{
+	struct rkcif_device *cif_dev = priv->cif_dev;
+
+	sditf_switch_before_toisp(cif_dev, cif_dev->switch_info.gpio_val);
+	sditf_toisp_hw_enable(priv);
+	WRITE_ONCE(priv->is_toisp_off, false);
+}
+
+static void sditf_enable_immediately(struct sditf_priv *priv)
+{
+	struct rkcif_device *cif_dev = priv->cif_dev;
+
+	/* Defer toisp enable while flip is in progress; apply on flip_end. */
+	if (cif_dev->is_in_flip) {
+		cif_dev->flip_pending.toisp_enable = true;
+		cif_dev->flip_pending.priv = priv;
+		v4l2_dbg(3, rkcif_debug, &cif_dev->v4l2_dev,
+			 "defer toisp enable (in flip)\n");
+		return;
 	}
-	priv->is_toisp_off = false;
+	sditf_enable_toisp(priv);
+}
+
+void sditf_flip_apply_pending(struct rkcif_device *cif_dev)
+{
+	struct rkcif_flip_pending *p = &cif_dev->flip_pending;
+	struct rkcif_stream *stream;
+	unsigned long flags;
+	int i;
+
+	if (!p->toisp_enable && !p->dma_mask && !p->change_to_online)
+		return;
+
+	v4l2_dbg(3, rkcif_debug, &cif_dev->v4l2_dev,
+		 "flip_apply_pending change_online %d toisp_en %d dma_mask 0x%x\n",
+		 p->change_to_online, p->toisp_enable, p->dma_mask);
+
+	/*
+	 * Enable before change_to_online: the latter early-returns when
+	 * is_toisp_off (set by FE / flip_start disable). Enabling first
+	 * clears the flag so deferred mode_src / thunderboot restore runs.
+	 */
+	if (p->priv &&
+	    (p->toisp_enable ||
+	     (p->change_to_online && READ_ONCE(p->priv->is_toisp_off))))
+		sditf_enable_toisp(p->priv);
+
+	if (p->change_to_online && p->priv)
+		sditf_change_to_online(p->priv);
+
+	/* Clear flip flag before dma restore so enable_dma won't re-defer. */
+	spin_lock_irqsave(&cif_dev->stream[0].vbq_lock, flags);
+	cif_dev->is_in_flip = false;
+	spin_unlock_irqrestore(&cif_dev->stream[0].vbq_lock, flags);
+
+	for (i = 0; i < RKCIF_MULTI_STREAMS_NUM; i++) {
+		if (!(p->dma_mask & BIT(i)))
+			continue;
+		stream = &cif_dev->stream[i];
+		stream->to_en_dma = p->to_en_dma[i];
+		v4l2_dbg(3, rkcif_debug, &cif_dev->v4l2_dev,
+			 "flip apply pending dma, stream[%d] to_en_dma 0x%x\n",
+			 i, stream->to_en_dma);
+		rkcif_enable_dma_capture(stream, true);
+	}
+
+	memset(p, 0, sizeof(*p));
 }
 
 static int sditf_start_stream(struct sditf_priv *priv)
@@ -1174,6 +1287,7 @@ static int sditf_start_stream(struct sditf_priv *priv)
 	for (i = 0; i < stream_cnt; i++)
 		rkcif_do_start_stream(&cif_dev->stream[i], mode);
 	INIT_LIST_HEAD(&priv->buf_free_list);
+	WRITE_ONCE(priv->is_stopping, false);
 	return 0;
 }
 
@@ -1199,6 +1313,8 @@ static int sditf_stop_stream(struct sditf_priv *priv)
 	else if (priv->hdr_cfg.hdr_mode == HDR_X3)
 		stream_cnt = 3;
 
+	WRITE_ONCE(priv->is_stopping, true);
+
 	for (i = 0; i < stream_cnt; i++)
 		rkcif_do_stop_stream(&cif_dev->stream[i], mode);
 
@@ -1215,7 +1331,7 @@ static int sditf_stop_stream(struct sditf_priv *priv)
 	priv->toisp_inf.ch_info[0].is_valid = false;
 	priv->toisp_inf.ch_info[1].is_valid = false;
 	priv->toisp_inf.ch_info[2].is_valid = false;
-	priv->is_toisp_off = true;
+	WRITE_ONCE(priv->is_toisp_off, true);
 	return 0;
 }
 
@@ -1243,6 +1359,7 @@ static int sditf_s_stream(struct v4l2_subdev *sd, int on)
 			ret = sditf_stop_stream(priv);
 			sditf_free_buf(priv);
 			priv->mode.rdbk_mode = RKISP_VICAP_RDBK_AIQ;
+			WRITE_ONCE(priv->is_stopping, false);
 		}
 
 	}
@@ -1270,8 +1387,9 @@ static int sditf_s_power(struct v4l2_subdev *sd, int on)
 		rkcif_update_unite_extend_pixel(cif_dev);
 	if (cif_dev->chip_id >= CHIP_RK3588_CIF) {
 		v4l2_dbg(1, rkcif_debug, &cif_dev->v4l2_dev,
-			"%s, toisp mode %d, hdr %d, set power %d\n",
-			__func__, priv->toisp_inf.link_mode, priv->hdr_cfg.hdr_mode, on);
+			"%s, toisp mode %d, hdr %d, set power %d, active_sensor %p\n",
+			__func__, priv->toisp_inf.link_mode, priv->hdr_cfg.hdr_mode, on,
+			cif_dev->active_sensor);
 		mutex_lock(&cif_dev->stream_lock);
 		if (on) {
 			ret = pm_runtime_resume_and_get(cif_dev->dev);
@@ -1427,6 +1545,20 @@ static int sditf_s_rx_buffer(struct v4l2_subdev *sd,
 			sditf_dump_rx_buf_state(stream, rx_buf, "dup_return_enqueue", dbufs->sequence);
 			goto out_unlock;
 		}
+		/*
+		 * Do not use dma_addr==0 as invalid: IOMMU may map to 0.
+		 * is_allocated is set by alloc paths (incl. reserved/thunderboot
+		 * which may not set mem_priv).
+		 */
+		if (!rx_buf->dummy.is_allocated) {
+			atomic_dec(&stream->buf_cnt);
+			v4l2_warn(&cif_dev->v4l2_dev,
+				  "stream[%d] reject already-freed rx_buf, dma=0x%x seq=%u\n",
+				  stream->id, (u32)rx_buf->dummy.dma_addr, dbufs->sequence);
+			sditf_dump_rx_buf_state(stream, rx_buf, "unallocated_rx_return",
+						dbufs->sequence);
+			goto out_unlock;
+		}
 		v4l2_dbg(3, rkcif_debug, &cif_dev->v4l2_dev, "+%d+ stream[%d] add 0x%x to list %p\n",
 			 __LINE__, stream->id, (u32)rx_buf->dummy.dma_addr, &stream->rx_buf_head);
 		list_add_tail(&rx_buf->list, &buf_stream->rx_buf_head);
@@ -1467,15 +1599,16 @@ out_unlock:
 	spin_unlock_irqrestore(&stream->vbq_lock, flags);
 
 	if (dbufs->is_switch && dbufs->type == BUF_SHORT) {
-		if (stream->is_in_vblank || !stream->dma_en) {
+		if (!READ_ONCE(priv->is_stopping) &&
+		    (stream->is_in_vblank || !stream->dma_en)) {
 			sditf_change_to_online(priv);
 			rkcif_modify_line_int(stream, false);
 			stream->is_line_inten = false;
-		} else {
+			v4l2_dbg(3, rkcif_debug, &cif_dev->v4l2_dev,
+				 "switch to online mode\n");
+		} else if (!READ_ONCE(priv->is_stopping)) {
 			stream->is_change_toisp = true;
 		}
-		v4l2_dbg(3, rkcif_debug, &cif_dev->v4l2_dev,
-			 "switch to online mode\n");
 	}
 
 	spin_lock_irqsave(&stream->cifdev->stream_spinlock, flags);
@@ -1854,7 +1987,7 @@ static int rkcif_subdev_media_init(struct sditf_priv *priv)
 	priv->toisp_inf.ch_info[0].is_valid = false;
 	priv->toisp_inf.ch_info[1].is_valid = false;
 	priv->toisp_inf.ch_info[2].is_valid = false;
-	priv->is_toisp_off = true;
+	WRITE_ONCE(priv->is_toisp_off, true);
 	if (priv->port_count > 1)
 		sditf_subdev_notifier(priv);
 	atomic_set(&priv->power_cnt, 0);
@@ -1869,7 +2002,7 @@ static int rkcif_subdev_media_init(struct sditf_priv *priv)
 	mutex_init(&priv->mutex);
 	priv->hdr_wrap_line = 0;
 	priv->is_buf_init = false;
-	priv->is_multi_online = false;
+	WRITE_ONCE(priv->is_multi_online, false);
 	priv->effect_exp_cnt = 0;
 	return 0;
 }

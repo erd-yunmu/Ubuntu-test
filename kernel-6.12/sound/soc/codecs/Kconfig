@@ -57,6 +57,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_AW8738
 	imply SND_SOC_AW87390
 	imply SND_SOC_AW88395
+	imply SND_SOC_AW88166
 	imply SND_SOC_AW88261
 	imply SND_SOC_AW88399
 	imply SND_SOC_BT_SCO
@@ -192,6 +193,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_PCM6240
 	imply SND_SOC_PEB2466
 	imply SND_SOC_RK1000
+	imply SND_SOC_RK2116_SPI
 	imply SND_SOC_RK312X
 	imply SND_SOC_RK3228
 	imply SND_SOC_RK3308
@@ -686,6 +688,18 @@ config SND_SOC_AW88395
 	  The Awinic AW88395 is an I2S/TDM input, high efficiency
 	  digital Smart K audio amplifier with an integrated 10V
 	  smart boost convert.
+
+config SND_SOC_AW88166
+	tristate "Soc Audio for awinic aw88166"
+	depends on I2C
+	select REGMAP_I2C
+	select GPIOLIB
+	select SND_SOC_AW88395_LIB
+	help
+	  This option enables support for aw88166 Smart PA.
+	  The awinic AW88166 is an I2S/TDM input, high efficiency
+	  digital Smart K audio amplifier with sound quality
+	  enhancement algorithms and speaker protection.
 
 config SND_SOC_AW88261
 	tristate "Soc Audio for awinic aw88261"
@@ -1539,6 +1553,17 @@ config SND_SOC_PEB2466
 config SND_SOC_RK1000
 	tristate "Rockchip RK1000 CODEC"
 	depends on MFD_RK1000
+
+config SND_SOC_RK2116
+	tristate
+
+config SND_SOC_RK2116_SPI
+	tristate "Rockchip RK2116 audio DSP (SPI)"
+	depends on SPI_MASTER
+	select SND_SOC_RK2116
+	select REGMAP
+	help
+	  Enable support for Rockchip RK2116 DSP.
 
 config SND_SOC_RK312X
 	select REGMAP_MMIO

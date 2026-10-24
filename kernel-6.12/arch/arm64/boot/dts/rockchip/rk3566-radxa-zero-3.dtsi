@@ -85,7 +85,7 @@
 	};
 };
 
-&combphy1_usq {
+&combphy1 {
 	status = "okay";
 };
 
@@ -492,11 +492,11 @@
 	status = "okay";
 };
 
-&usbdrd_dwc3 {
+&usb_host0_xhci {
 	status = "okay";
 };
 
-&usbhost_dwc3 {
+&usb_host1_xhci {
 	status = "okay";
 };
 
@@ -504,11 +504,11 @@
 	status = "okay";
 };
 
-&u2phy0_host {
+&usb2phy0_host {
 	status = "okay";
 };
 
-&u2phy0_otg {
+&usb2phy0_otg {
 	status = "okay";
 };
 

@@ -19,14 +19,14 @@
 #define RK3288_CLKGEN_DIV		2
 #define SDMMC_TIMING_CON0		0x130
 #define SDMMC_TIMING_CON1		0x134
+#define SDMMC_MISC_CON			0x138
+#define MEM_CLK_AUTOGATE_ENABLE		BIT(5)
 #define ROCKCHIP_MMC_DELAY_SEL		BIT(10)
 #define ROCKCHIP_MMC_DEGREE_MASK	0x3
 #define ROCKCHIP_MMC_DEGREE_OFFSET	1
 #define ROCKCHIP_MMC_DELAYNUM_OFFSET	2
 #define ROCKCHIP_MMC_DELAYNUM_MASK	(0xff << ROCKCHIP_MMC_DELAYNUM_OFFSET)
 #define ROCKCHIP_MMC_DELAY_ELEMENT_PSEC	60
-#define SDMMC_MISC_CON		0x138
-#define MEM_CLK_AUTOGATE_ENABLE BIT(5)
 #define HIWORD_UPDATE(val, mask, shift) \
 		((val) << (shift) | (mask) << ((shift) + 16))
 
@@ -182,7 +182,8 @@ static int rockchip_mmc_set_phase(struct dw_mci *host, bool sample, int degrees)
 static void dw_mci_rk3288_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 {
 	struct dw_mci_rockchip_priv_data *priv = host->priv;
-	int ret;
+	struct mmc_clk_phase phase = host->phase_map.phase[ios->timing];
+	int ret, sample_phase, drv_phase;
 	unsigned int cclkin;
 	u32 bus_hz;
 
@@ -221,8 +222,15 @@ static void dw_mci_rk3288_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 	}
 
 	/* Make sure we use phases which we can enumerate with */
-	if (!IS_ERR(priv->sample_clk) && ios->timing <= MMC_TIMING_SD_HS)
-		rockchip_mmc_set_phase(host, true, priv->default_sample_phase);
+	if (!IS_ERR(priv->sample_clk)) {
+		/* Keep backward compatibility */
+		if (ios->timing <= MMC_TIMING_SD_HS) {
+			sample_phase = phase.valid ? phase.in_deg : priv->default_sample_phase;
+			rockchip_mmc_set_phase(host, true, sample_phase);
+		} else if (phase.valid) {
+			rockchip_mmc_set_phase(host, true, phase.in_deg);
+		}
+	}
 
 	/*
 	 * Set the drive phase offset based on speed mode to achieve hold times.
@@ -251,15 +259,13 @@ static void dw_mci_rk3288_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 	 * same results, for instance).
 	 */
 	if (!IS_ERR(priv->drv_clk)) {
-		int phase;
-
 		/*
 		 * In almost all cases a 90 degree phase offset will provide
 		 * sufficient hold times across all valid input clock rates
 		 * assuming delay_o is not absurd for a given SoC.  We'll use
 		 * that as a default.
 		 */
-		phase = 90;
+		drv_phase = 90;
 
 		switch (ios->timing) {
 		case MMC_TIMING_MMC_DDR52:
@@ -269,7 +275,7 @@ static void dw_mci_rk3288_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 			 * to get the same timings.
 			 */
 			if (ios->bus_width == MMC_BUS_WIDTH_8)
-				phase = 180;
+				drv_phase = 180;
 			break;
 		case MMC_TIMING_UHS_SDR104:
 		case MMC_TIMING_MMC_HS200:
@@ -281,11 +287,14 @@ static void dw_mci_rk3288_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 			 * SoCs measured this seems to be OK, but it doesn't
 			 * hurt to give margin here, so we use 180.
 			 */
-			phase = 180;
+			drv_phase = 180;
 			break;
 		}
 
-		rockchip_mmc_set_phase(host, false, phase);
+		/* Use out phase from phase map first */
+		if (phase.valid)
+			drv_phase = phase.out_deg;
+		rockchip_mmc_set_phase(host, false, drv_phase);
 	}
 }
 
@@ -568,8 +577,8 @@ static int dw_mci_rk3576_parse_dt(struct dw_mci *host)
 
 static int dw_mci_rockchip_init(struct dw_mci *host)
 {
-	int ret, i;
 	struct dw_mci_rockchip_priv_data *priv = host->priv;
+	int ret, i;
 
 	/* It is slot 8 on Rockchip SoCs */
 	host->sdio_id0 = 8;
@@ -739,9 +748,8 @@ static int dw_mci_rockchip_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops dw_mci_rockchip_dev_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
-				pm_runtime_force_resume)
-	SET_RUNTIME_PM_OPS(dw_mci_rockchip_runtime_suspend, dw_mci_rockchip_runtime_resume, NULL)
+	SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
+	RUNTIME_PM_OPS(dw_mci_rockchip_runtime_suspend, dw_mci_rockchip_runtime_resume, NULL)
 };
 
 static struct platform_driver dw_mci_rockchip_pltfm_driver = {
@@ -751,7 +759,7 @@ static struct platform_driver dw_mci_rockchip_pltfm_driver = {
 		.name		= "dwmmc_rockchip",
 		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table	= dw_mci_rockchip_match,
-		.pm		= &dw_mci_rockchip_dev_pm_ops,
+		.pm		= pm_ptr(&dw_mci_rockchip_dev_pm_ops),
 	},
 };
 

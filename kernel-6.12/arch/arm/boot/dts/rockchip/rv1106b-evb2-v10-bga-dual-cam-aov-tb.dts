@@ -1,0 +1,162 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2026 Rockchip Electronics Co., Ltd.
+ *
+ * RV1106B EVB2 V10 BGA Dual-Camera AOV (Thunder Boot) DTS
+ *
+ * Design:
+ *   - Base: rv1106b-evb2-v10-bga-dual-cam-tb.dts (dual SC200AI nodes, BGA memory layout)
+ *   - AOV extension: rv1106b-amp.dtsi + this file overrides AOV-required nodes
+ *   - AOV memory layout (compressed ramdisk):
+ *       meta      : 0x00800000  size 0xB0000  (704K)
+ *       rkisp0    : 0x008B0000  size 0x54F000
+ *       ramdisk_r : 0x00DFF000  size 8M
+ *       ramdisk_c : 0x015FF000  size 4M
+ *       rkisp1    : 0x019FF000  size 0x54F000
+ *   - AOV key nodes:
+ *       * gpio-keys + pwr_key (used for sleep wakeup)
+ *       * sc200ai/sc200ai_1: stb + soft_sync (AOV dual-camera sync)
+ *       * rkcif_mipi_lvds{,_1}: fastboot-reserved-bufs=2 (reduce TB-stage buffers)
+ *       * rtc: rtc-suspend-bypass (bypass RTC wakeup under AOV mode)
+ *       * rockchip_suspend: status=okay + sleep-io-config (PM sleep IO config)
+ */
+
+/dts-v1/;
+
+#include "rv1106b-evb2-v10-bga-dual-cam-tb.dts"
+#include "rv1106b-amp.dtsi"
+
+/ {
+	model = "Rockchip RV1106B EVB2 V10 BGA Dual Camera AOV TB Board";
+	compatible = "rockchip,rv1106b-evb2-v10-bga-dual-cam-aov-tb", "rockchip,rv1106b";
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		autorepeat;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pwr_key>;
+		power-key {
+			gpios = <&gpio0 RK_PA4 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_POWER>;
+			label = "GPIO Key Power";
+			debounce-interval = <100>;
+			wakeup-source;
+			/* gpio-key,wakeup; */
+		};
+	};
+};
+
+&pinctrl {
+	buttons {
+		pwr_key: pwr-key {
+			rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+};
+
+&meta {
+	reg = <0x00800000 0xb0000>;
+};
+
+&rkisp_thunderboot {
+	/* reg's offset MUST match with RTOS */
+	/*
+	 * vicap, capture raw10, ceil(w*10/8/256)*256*h *2(buf num) + sizeof(rkisp_thunderboot_resmem_head)
+	 * In RV1103B the size of rkisp_thunderboot_resmem_head is 0x9000, and it is 0x6000 in RV1103/RV1106
+	 * e.g. 1920x1080: 0x546000(raw picture size) + 0x9000 = 0x54f000
+	 * 0x008b0000 = (meta's reg offset) + (meta's reg size)
+	 *            = 0x00800000 + 0xb0000
+	 */
+	reg = <0x008b0000 0x54f000>;
+};
+
+&ramdisk_r {
+	reg = <0xdff000 (12 * 0x00100000)>;
+};
+
+&ramdisk_c {
+	reg = <0x19ff000 (6 * 0x00100000)>;
+};
+
+&rkisp1_thunderboot {
+	/*
+	 * vicap, capture raw10, ceil(w*10/8/256)*256*h *2(buf num) + sizeof(rkisp_thunderboot_resmem_head)
+	 * In RV1103B the size of rkisp_thunderboot_resmem_head is 0x9000, and it is 0x6000 in RV1103/RV1106
+	 * e.g. 1920x1080: 0x546000(raw picture size) + 0x9000 = 0x54f000
+	 * 0x1fff000  = (ramdisk_c's reg offset) + (ramdisk_c's reg size)
+	 *            = 0x19ff000 + (6 * 0x00100000)
+	 */
+	reg = <0x1fff000 0x54f000>;
+};
+
+&rkcif_mipi_lvds {
+	fastboot-reserved-bufs = <2>;
+};
+
+&rkcif_mipi_lvds1 {
+	fastboot-reserved-bufs = <2>;
+};
+
+&rtc {
+	rockchip,rtc-suspend-bypass;
+	status = "okay";
+};
+
+&sc200ai {
+	rockchip,camera-module-stb = <1>;
+	rockchip,camera-module-sync-mode = "soft_sync";
+};
+
+&sc200ai_1 {
+	rockchip,camera-module-stb = <1>;
+	rockchip,camera-module-sync-mode = "soft_sync";
+};
+
+&rockchip_suspend {
+	status = "okay";
+
+	rockchip,sleep-io-config = <
+		/* pmic_sleep */
+		(0
+		| RKPM_IO_CFG_IOMUX_GPIO
+		| RKPM_IO_CFG_GPIO_DIR_INPUT
+		| RKPM_IO_CFG_PULL_DOWN
+		| RKPM_IO_CFG_ID(0)
+		)
+		(0
+		| RKPM_IO_CFG_IOMUX_GPIO
+		| RKPM_IO_CFG_GPIO_DIR_INPUT
+		| RKPM_IO_CFG_PULL_NONE
+		| RKPM_IO_CFG_ID(1)
+		)
+		(0
+		| RKPM_IO_CFG_IOMUX_GPIO
+		| RKPM_IO_CFG_GPIO_DIR_INPUT
+		| RKPM_IO_CFG_PULL_NONE
+		| RKPM_IO_CFG_ID(2)
+		)
+		(0
+		| RKPM_IO_CFG_IOMUX(1)
+		| RKPM_IO_CFG_PULL_NONE
+		| RKPM_IO_CFG_ID(3)
+		)
+		(0
+		| RKPM_IO_CFG_IOMUX_GPIO
+		| RKPM_IO_CFG_GPIO_DIR_INPUT
+		| RKPM_IO_CFG_PULL_UP
+		| RKPM_IO_CFG_ID(4)
+		)
+		(0
+		| RKPM_IO_CFG_IOMUX_GPIO
+		| RKPM_IO_CFG_GPIO_DIR_INPUT
+		| RKPM_IO_CFG_PULL_DOWN
+		| RKPM_IO_CFG_ID(5)
+		)
+		(0
+		| RKPM_IO_CFG_IOMUX_GPIO
+		| RKPM_IO_CFG_GPIO_DIR_INPUT
+		| RKPM_IO_CFG_PULL_DOWN
+		| RKPM_IO_CFG_ID(6)
+		)
+	>;
+};

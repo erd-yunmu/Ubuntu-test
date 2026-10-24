@@ -1401,20 +1401,11 @@ void serial8250_em485_stop_tx(struct uart_8250_port *p)
 	/* Port locked to synchronize UART_IER access against the console. */
 	lockdep_assert_held_once(&p->port.lock);
 
-#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
-	if (p->port.rs485_de_gpio) {
-		int value = (p->port.rs485.flags & SER_RS485_RTS_AFTER_SEND) ? 0 : 1;
-
-		gpiod_set_value(p->port.rs485_de_gpio, value);
-	} else
-#endif
-	{
-		if (p->port.rs485.flags & SER_RS485_RTS_AFTER_SEND)
-			mcr |= UART_MCR_RTS;
-		else
-			mcr &= ~UART_MCR_RTS;
-		serial8250_out_MCR(p, mcr);
-	}
+	if (p->port.rs485.flags & SER_RS485_RTS_AFTER_SEND)
+		mcr |= UART_MCR_RTS;
+	else
+		mcr &= ~UART_MCR_RTS;
+	serial8250_out_MCR(p, mcr);
 
 	/*
 	 * Empty the RX FIFO, we are not interested in anything
@@ -1497,9 +1488,6 @@ static inline void __stop_tx(struct uart_8250_port *p)
 		 * for emptying of the shift register.
 		 */
 		if (!(lsr & UART_LSR_TEMT)) {
-#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
-			stop_delay = p->port.frame_time + 10000;
-#else
 			if (!(p->capabilities & UART_CAP_NOTEMT))
 				return;
 			/*
@@ -1510,7 +1498,6 @@ static inline void __stop_tx(struct uart_8250_port *p)
 			 * Roughly estimate 1 extra bit here with / 7.
 			 */
 			stop_delay = p->port.frame_time + DIV_ROUND_UP(p->port.frame_time, 7);
-#endif
 		}
 
 		__stop_tx_rs485(p, stop_delay);
@@ -1583,15 +1570,6 @@ void serial8250_em485_start_tx(struct uart_8250_port *up)
 
 	if (!(up->port.rs485.flags & SER_RS485_RX_DURING_TX))
 		serial8250_stop_rx(&up->port);
-
-#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
-	if (up->port.rs485_de_gpio) {
-		int value = (up->port.rs485.flags & SER_RS485_RTS_ON_SEND) ? 0 : 1;
-
-		gpiod_set_value(up->port.rs485_de_gpio, value);
-		return;
-	}
-#endif
 
 	if (up->port.rs485.flags & SER_RS485_RTS_ON_SEND)
 		mcr |= UART_MCR_RTS;
@@ -2598,6 +2576,12 @@ void serial8250_do_shutdown(struct uart_port *port)
 	 * the IRQ chain.
 	 */
 	serial_port_in(port, UART_RX);
+	/*
+	 * LCR writes on DW UART can trigger late (unmaskable) IRQs.
+	 * Handle them before releasing the handler.
+	 */
+	synchronize_irq(port->irq);
+
 	serial8250_rpm_put(up);
 
 	up->ops->release_irq(up);

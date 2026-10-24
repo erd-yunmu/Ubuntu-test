@@ -280,6 +280,18 @@
 #define RKMODULE_GET_LOFIC_VS_RATIO \
 	_IOR('x', 8, struct rkmodule_dcg_ratio)
 
+#define RKMODULE_SET_SWITCH_MODE	\
+	_IOW('x', 9, __u32)
+
+#define RKCIS_CMD_SET_AOV_MODE  \
+	_IOW('x', 10, __u32)
+
+#define RKCIS_CMD_SET_STREAM_MODE  \
+	_IOW('x', 11, __u32)
+
+#define RKCIS_CMD_SET_DELAY_STREAM  \
+	_IOW('x', 12, __u32)
+
 #define RKMODULE_REG_LIST_MAX (16)
 struct rkmodule_reg_struct {
 	__u32 reg_addr;

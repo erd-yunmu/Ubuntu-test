@@ -113,7 +113,6 @@ struct rockchip_dmcfreq {
 	struct clk *dmc_clk;
 	struct clk *pclk_mailbox;
 	struct devfreq_event_dev **edev;
-	struct mutex lock;
 	struct dram_timing *timing;
 	struct notifier_block status_nb;
 	struct notifier_block panic_nb;
@@ -165,7 +164,6 @@ struct rockchip_dmcfreq {
 
 	bool is_fixed;
 	bool is_set_rate_direct;
-	bool is_in_suspend;
 	bool is_delayed_freq_scaling;
 
 	unsigned int touchboostpulse_duration_val;
@@ -2563,24 +2561,14 @@ static int rockchip_get_system_status_level(struct device_node *np,
 	return 0;
 }
 
-static void rockchip_dmcfreq_update_target(struct rockchip_dmcfreq *dmcfreq)
+static int rockchip_dmcfreq_system_status_notifier(struct notifier_block *nb,
+						   unsigned long status,
+						   void *ptr)
 {
-	struct devfreq *devfreq = dmcfreq->info.devfreq;
-
-	mutex_lock(&devfreq->lock);
-	update_devfreq(devfreq);
-	mutex_unlock(&devfreq->lock);
-}
-
-static int rockchip_dmcfreq_system_status_notifier_locked(struct rockchip_dmcfreq *dmcfreq,
-							  unsigned long status)
-{
+	struct rockchip_dmcfreq *dmcfreq = system_status_to_dmcfreq(nb);
 	unsigned long target_rate = 0;
 	unsigned int refresh = false;
 	bool is_fixed = false;
-
-	if (dmcfreq->is_in_suspend)
-		return NOTIFY_DONE;
 
 	if (dmcfreq->fixed_rate && (is_dualview(status) || is_isp(status))) {
 		if (dmcfreq->is_fixed)
@@ -2658,23 +2646,9 @@ next:
 			dmcfreq->set_auto_self_refresh(refresh);
 		dmcfreq->refresh = refresh;
 	}
-	rockchip_dmcfreq_update_target(dmcfreq);
+	rockchip_dmcfreq_update_target(&dmcfreq->info);
 
 	return NOTIFY_OK;
-}
-
-static int rockchip_dmcfreq_system_status_notifier(struct notifier_block *nb,
-						   unsigned long status,
-						   void *ptr)
-{
-	struct rockchip_dmcfreq *dmcfreq = system_status_to_dmcfreq(nb);
-	int ret;
-
-	mutex_lock(&dmcfreq->lock);
-	ret = rockchip_dmcfreq_system_status_notifier_locked(dmcfreq, status);
-	mutex_unlock(&dmcfreq->lock);
-
-	return ret;
 }
 
 static int rockchip_dmcfreq_panic_notifier(struct notifier_block *nb,
@@ -2907,17 +2881,24 @@ static int devfreq_dmc_ondemand_handler(struct devfreq *devfreq,
 					unsigned int event, void *data)
 {
 	struct rockchip_dmcfreq *dmcfreq = dev_get_drvdata(devfreq->dev.parent);
+	struct dmcfreq_common_info *info = &dmcfreq->info;
 
-	if (!dmcfreq->info.auto_freq_en)
+	if (!info->auto_freq_en)
 		return 0;
 
 	switch (event) {
 	case DEVFREQ_GOV_START:
 		devfreq_monitor_start(devfreq);
+		mutex_lock(&info->lock);
+		info->is_gov_stopped = false;
+		mutex_unlock(&info->lock);
 		break;
 
 	case DEVFREQ_GOV_STOP:
 		devfreq_monitor_stop(devfreq);
+		mutex_lock(&info->lock);
+		info->is_gov_stopped = true;
+		mutex_unlock(&info->lock);
 		break;
 
 	case DEVFREQ_GOV_UPDATE_INTERVAL:
@@ -3273,7 +3254,7 @@ static void rockchip_dmcfreq_boost_work(struct work_struct *work)
 {
 	struct rockchip_dmcfreq *dmcfreq = boost_to_dmcfreq(work);
 
-	rockchip_dmcfreq_update_target(dmcfreq);
+	rockchip_dmcfreq_update_target(&dmcfreq->info);
 }
 
 static void rockchip_dmcfreq_input_event(struct input_handle *handle,
@@ -3381,7 +3362,7 @@ static void rockchip_dmcfreq_delayed_scaling_work(struct work_struct *work)
 	if (dmcfreq->is_delayed_freq_scaling) {
 		dmcfreq->is_delayed_freq_scaling = false;
 		dev_info(dmcfreq->dev, "disable delayed freq scaling\n");
-		rockchip_dmcfreq_update_target(dmcfreq);
+		rockchip_dmcfreq_update_target(&dmcfreq->info);
 	}
 }
 
@@ -3408,7 +3389,7 @@ static int rockchip_dmcfreq_probe(struct platform_device *pdev)
 	data->dev = dev;
 	data->dev->init_name = "dmc";
 	data->info.dev = dev;
-	mutex_init(&data->lock);
+	mutex_init(&data->info.lock);
 	INIT_LIST_HEAD(&data->video_info_list);
 
 	ret = rockchip_dmcfreq_get_event(data);
@@ -3563,16 +3544,18 @@ static int rockchip_dmcfreq_resume_locked(struct rockchip_dmcfreq *dmcfreq)
 static __maybe_unused int rockchip_dmcfreq_suspend(struct device *dev)
 {
 	struct rockchip_dmcfreq *dmcfreq = dev_get_drvdata(dev);
+	struct dmcfreq_common_info *info;
 	int ret = 0;
 
 	if (!dmcfreq)
 		return 0;
+	info = &dmcfreq->info;
 
-	mutex_lock(&dmcfreq->lock);
+	mutex_lock(&info->lock);
 	ret = rockchip_dmcfreq_suspend_locked(dmcfreq);
 	if (!ret)
-		dmcfreq->is_in_suspend = true;
-	mutex_unlock(&dmcfreq->lock);
+		dmcfreq->info.is_in_suspend = true;
+	mutex_unlock(&info->lock);
 
 	return ret;
 }
@@ -3580,15 +3563,17 @@ static __maybe_unused int rockchip_dmcfreq_suspend(struct device *dev)
 static __maybe_unused int rockchip_dmcfreq_resume(struct device *dev)
 {
 	struct rockchip_dmcfreq *dmcfreq = dev_get_drvdata(dev);
+	struct dmcfreq_common_info *info;
 	int ret = 0;
 
 	if (!dmcfreq)
 		return 0;
+	info = &dmcfreq->info;
 
-	mutex_lock(&dmcfreq->lock);
+	mutex_lock(&info->lock);
 	ret = rockchip_dmcfreq_resume_locked(dmcfreq);
-	dmcfreq->is_in_suspend = false;
-	mutex_unlock(&dmcfreq->lock);
+	dmcfreq->info.is_in_suspend = false;
+	mutex_unlock(&info->lock);
 
 	return ret;
 }

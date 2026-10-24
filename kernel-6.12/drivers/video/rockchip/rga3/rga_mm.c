@@ -90,11 +90,11 @@ static int rga_shadow_setup(struct rga_virt_addr *virt_addr)
 	bool need_head = false;
 	bool need_tail = false;
 
-	if (!virt_addr || virt_addr->page_count <= 0 || virt_addr->size == 0)
+	if (!virt_addr || virt_addr->nr_pages <= 0 || virt_addr->size == 0)
 		return 0;
 
 	head_idx = 0;
-	tail_idx = virt_addr->page_count - 1;
+	tail_idx = virt_addr->nr_pages - 1;
 	total = virt_addr->size;
 	head_offset = virt_addr->offset;
 
@@ -204,126 +204,147 @@ static void rga_current_mm_read_unlock(struct mm_struct *mm)
 #endif
 }
 
-static int rga_get_user_pages_from_vma(struct page **pages, unsigned long Memory,
-				       uint32_t pageCount, struct mm_struct *current_mm)
+static void rga_current_mm_assert_locked(struct mm_struct *mm)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+	mmap_assert_locked(mm);
+#else
+	lockdep_assert_held(&mm->mmap_lock);
+	VM_BUG_ON_MM(!rwsem_is_locked(&mm->mmap_lock), mm);
+#endif
+}
+
+static int rga_get_user_pages_from_vma(struct page **pages, unsigned long uaddr,
+				       uint32_t nr_pages, struct mm_struct *current_mm)
 {
 	int ret = 0;
-	int i;
-	struct vm_area_struct *vma;
-	spinlock_t *ptl;
-	pte_t *pte;
-	pgd_t *pgd;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
-	p4d_t *p4d;
-#endif
-	pud_t *pud;
-	pmd_t *pmd;
+	size_t i;
+	struct vm_area_struct *vma = NULL;
 	unsigned long pfn;
+	unsigned long cur_addr;
 
-	for (i = 0; i < pageCount; i++) {
-		vma = find_vma(current_mm, (Memory + i) << PAGE_SHIFT);
-		if (!vma) {
-			rga_err("page[%d] failed to get vma\n", i);
-			ret = RGA_OUT_OF_RESOURCES;
-			break;
-		}
+	rga_current_mm_assert_locked(current_mm);
 
-		pgd = pgd_offset(current_mm, (Memory + i) << PAGE_SHIFT);
-		if (pgd_none(*pgd) || unlikely(pgd_bad(*pgd))) {
-			rga_err("page[%d] failed to get pgd\n", i);
-			ret = RGA_OUT_OF_RESOURCES;
-			break;
-		}
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
-		/*
-		 * In the four-level page table,
-		 * it will do nothing and return pgd.
-		 */
-		p4d = p4d_offset(pgd, (Memory + i) << PAGE_SHIFT);
-		if (p4d_none(*p4d) || unlikely(p4d_bad(*p4d))) {
-			rga_err("page[%d] failed to get p4d\n", i);
-			ret = RGA_OUT_OF_RESOURCES;
-			break;
-		}
+	for (i = 0; i < nr_pages; i++) {
+		cur_addr = uaddr + (i << PAGE_SHIFT);
 
-		pud = pud_offset(p4d, (Memory + i) << PAGE_SHIFT);
+		if (vma == NULL || cur_addr >= vma->vm_end) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+			vma = vma_lookup(current_mm, cur_addr);
 #else
-		pud = pud_offset(pgd, (Memory + i) << PAGE_SHIFT);
+			vma = find_vma(current_mm, cur_addr);
+			if (vma != NULL && cur_addr < vma->vm_start)
+				vma = NULL;
+#endif
+			if (vma == NULL) {
+				rga_err("va[0x%lx] is not mapped (unmapped gap detected)\n",
+					cur_addr);
+				ret = -EINVAL;
+				goto out;
+			}
+		}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+		struct follow_pfnmap_args args = {
+			.vma = vma,
+			.address = cur_addr,
+		};
+
+		ret = follow_pfnmap_start(&args);
+		if (ret) {
+			rga_err("va[0x%lx] failed to get pfn, ret = %d\n", cur_addr, ret);
+			goto out;
+		}
+
+		pfn = args.pfn;
+
+		follow_pfnmap_end(&args);
+
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
+		spinlock_t *ptl;
+		pte_t *ptep;
+
+		ret = follow_pte(vma->vm_mm, cur_addr, &ptep, &ptl);
+		if (ret < 0) {
+			rga_err("va[0x%lx] failed to get pte, ret = %d\n", cur_addr, ret);
+			goto out;
+		}
+
+		pfn = pte_pfn(ptep_get(ptep));
+
+		pte_unmap_unlock(ptep, ptl);
+
+#else
+		ret = follow_pfn(vma, cur_addr, &pfn);
+		if (ret < 0) {
+			rga_err("va[0x%lx] failed to get pfn, ret = %d\n", cur_addr, ret);
+			goto out;
+		}
 #endif
 
-		if (pud_none(*pud) || unlikely(pud_bad(*pud))) {
-			rga_err("page[%d] failed to get pud\n", i);
-			ret = RGA_OUT_OF_RESOURCES;
-			break;
+		if (pfn_valid(pfn)) {
+			pages[i] = pfn_to_page(pfn);
+		} else {
+			rga_err("va[0x%lx] pfn[0x%lx] has no valid struct page\n", cur_addr, pfn);
+			ret = -EINVAL;
+			goto out;
 		}
-		pmd = pmd_offset(pud, (Memory + i) << PAGE_SHIFT);
-		if (pmd_none(*pmd) || unlikely(pmd_bad(*pmd))) {
-			rga_err("page[%d] failed to get pmd\n", i);
-			ret = RGA_OUT_OF_RESOURCES;
-			break;
-		}
-		pte = pte_offset_map_lock(current_mm, pmd,
-					  (Memory + i) << PAGE_SHIFT, &ptl);
-		if (pte_none(*pte)) {
-			rga_err("page[%d] failed to get pte\n", i);
-			pte_unmap_unlock(pte, ptl);
-			ret = RGA_OUT_OF_RESOURCES;
-			break;
-		}
-
-		pfn = pte_pfn(*pte);
-		pages[i] = pfn_to_page(pfn);
-		pte_unmap_unlock(pte, ptl);
 	}
 
-	if (ret == RGA_OUT_OF_RESOURCES && i > 0)
-		rga_err("Only get buffer %d byte from vma, but current image required %d byte",
-			(int)(i * PAGE_SIZE), (int)(pageCount * PAGE_SIZE));
-
+	return 0;
+out:
+	rga_err("Only get buffer %d byte from vma, but current image required %d byte",
+		(int)(i << PAGE_SHIFT), (int)(nr_pages << PAGE_SHIFT));
 	return ret;
 }
 
-static int rga_get_user_pages(struct page **pages, unsigned long Memory,
-			      uint32_t pageCount, int writeFlag,
+static int rga_get_user_pages(struct page **pages, unsigned long uaddr,
+			      uint32_t nr_pages, int write_flag,
 			      struct mm_struct *current_mm)
 {
 	uint32_t i;
 	int32_t ret = 0;
 	int32_t result;
 
+	if (!PAGE_ALIGNED(uaddr)) {
+		rga_err("uaddr is not page aligned: 0x%lx\n", uaddr);
+		return -EINVAL;
+	}
+
 	rga_current_mm_read_lock(current_mm);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 168) && \
     LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
-	result = get_user_pages(current, current_mm, Memory << PAGE_SHIFT,
-				pageCount, writeFlag ? FOLL_WRITE : 0,
+	result = get_user_pages(current, current_mm, uaddr,
+				nr_pages, write_flag ? FOLL_WRITE : 0,
 				pages, NULL);
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0)
-	result = get_user_pages(current, current_mm, Memory << PAGE_SHIFT,
-				pageCount, writeFlag ? FOLL_WRITE : 0, 0, pages, NULL);
+	result = get_user_pages(current, current_mm, uaddr,
+				nr_pages, write_flag ? FOLL_WRITE : 0, 0, pages, NULL);
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
 	result = get_user_pages_remote(current, current_mm,
-				       Memory << PAGE_SHIFT,
-				       pageCount, writeFlag ? FOLL_WRITE : 0, pages, NULL, NULL);
+				       uaddr,
+				       nr_pages, write_flag ? FOLL_WRITE : 0, pages, NULL, NULL);
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
-	result = get_user_pages_remote(current_mm, Memory << PAGE_SHIFT,
-				       pageCount, writeFlag ? FOLL_WRITE : 0, pages, NULL, NULL);
+	result = get_user_pages_remote(current_mm, uaddr,
+				       nr_pages, write_flag ? FOLL_WRITE : 0, pages, NULL, NULL);
 #else
-	result = get_user_pages_remote(current_mm, Memory << PAGE_SHIFT,
-				       pageCount, writeFlag ? FOLL_WRITE : 0, pages, NULL);
+	result = get_user_pages_remote(current_mm, uaddr,
+				       nr_pages, write_flag ? FOLL_WRITE : 0, pages, NULL);
 #endif
 
-	if (result > 0 && result >= pageCount) {
+	if (result > 0 && result >= nr_pages) {
 		ret = result;
 	} else {
 		if (result > 0)
 			for (i = 0; i < result; i++)
 				put_page(pages[i]);
 
-		ret = rga_get_user_pages_from_vma(pages, Memory, pageCount, current_mm);
+		ret = rga_get_user_pages_from_vma(pages, uaddr,
+						  nr_pages, current_mm);
 		if (ret < 0 && result > 0) {
 			rga_err("Only get buffer %d byte from user pages, but current image required %d byte\n",
-				(int)(result * PAGE_SIZE), (int)(pageCount * PAGE_SIZE));
+				(int)(result * PAGE_SIZE), (int)(nr_pages * PAGE_SIZE));
 		}
 	}
 
@@ -332,7 +353,7 @@ static int rga_get_user_pages(struct page **pages, unsigned long Memory,
 	return ret;
 }
 
-static int rga_get_phys_addr_pages(struct page **pages, phys_addr_t phys_addr, uint32_t page_count)
+static int rga_get_phys_addr_pages(struct page **pages, phys_addr_t phys_addr, uint32_t nr_pages)
 {
 	int i;
 	phys_addr_t addr;
@@ -341,7 +362,7 @@ static int rga_get_phys_addr_pages(struct page **pages, phys_addr_t phys_addr, u
 		return -EINVAL;
 
 	addr = phys_addr;
-	for (i = 0; i < page_count; i++) {
+	for (i = 0; i < nr_pages; i++) {
 		pages[i] = phys_to_page(addr);
 		addr += PAGE_SIZE;
 	}
@@ -360,7 +381,7 @@ static void rga_free_sgt(struct sg_table **sgt_ptr)
 }
 
 static struct sg_table *rga_alloc_sgt(struct page **pages,
-				      int page_count, size_t offset,
+				      int nr_pages, size_t offset,
 				      size_t size, gfp_t gfp_mask)
 {
 	int ret;
@@ -373,7 +394,7 @@ static struct sg_table *rga_alloc_sgt(struct page **pages,
 	}
 
 	/* get sg form pages. */
-	ret = sg_alloc_table_from_pages(sgt, pages, page_count, offset, size, gfp_mask);
+	ret = sg_alloc_table_from_pages(sgt, pages, nr_pages, offset, size, gfp_mask);
 	if (ret) {
 		rga_err("sg_alloc_table_from_pages failed");
 		goto out_free_sgt;
@@ -410,16 +431,16 @@ static void rga_free_virt_addr(struct rga_virt_addr **virt_addr_p)
 }
 
 static int rga_alloc_virt_addr(struct rga_virt_addr **virt_addr_p,
-			       uint64_t viraddr,
+			       uint64_t uaddr,
 			       struct rga_memory_parm *memory_parm,
-			       int writeFlag,
+			       int write_flag,
 			       struct mm_struct *mm)
 {
 	int i;
 	int ret;
 	int result = 0;
 	int order;
-	unsigned int count;
+	unsigned int nr_pages;
 	int img_size;
 	size_t offset;
 	struct page **pages = NULL;
@@ -433,28 +454,28 @@ static int rga_alloc_virt_addr(struct rga_virt_addr **virt_addr_p,
 					      memory_parm->format,
 					      NULL, NULL, NULL);
 
-	offset = viraddr & (~PAGE_MASK);
-	count = RGA_GET_PAGE_COUNT(img_size + offset);
-	if (!count) {
-		rga_err("failed to calculating buffer size! img_size = %d, count = %d, offset = %ld\n",
-			img_size, count, (unsigned long)offset);
+	offset = uaddr & (~PAGE_MASK);
+	nr_pages = RGA_GET_NR_PAGES(img_size + offset);
+	if (!nr_pages) {
+		rga_err("failed to calculating buffer size! img_size = %d, nr_pages = %d, offset = %ld\n",
+			img_size, nr_pages, (unsigned long)offset);
 		rga_dump_memory_parm(memory_parm);
 		return -EFAULT;
 	}
 
 	/* alloc pages and page_table */
 	pages = (struct page **)rga_get_free_pages(GFP_KERNEL,
-		&order, count * sizeof(struct page *));
+		&order, nr_pages * sizeof(struct page *));
 	if (pages == NULL) {
-		rga_err("%s can not alloc pages for viraddr pages\n", __func__);
+		rga_err("%s can not alloc pages\n", __func__);
 		return -ENOMEM;
 	}
 
 	/* get pages from virtual address. */
-	ret = rga_get_user_pages(pages, viraddr >> PAGE_SHIFT, count, writeFlag, mm);
+	ret = rga_get_user_pages(pages, uaddr & PAGE_MASK, nr_pages, write_flag, mm);
 	if (ret < 0) {
 		rga_err("failed to get pages from virtual address: 0x%lx\n",
-		       (unsigned long)viraddr);
+		       (unsigned long)uaddr);
 		ret = -EINVAL;
 		goto out_free_pages;
 	} else if (ret > 0) {
@@ -470,10 +491,10 @@ static int rga_alloc_virt_addr(struct rga_virt_addr **virt_addr_p,
 	}
 	virt_addr = *virt_addr_p;
 
-	virt_addr->addr = viraddr;
+	virt_addr->addr = uaddr;
 	virt_addr->pages = pages;
 	virt_addr->pages_order = order;
-	virt_addr->page_count = count;
+	virt_addr->nr_pages = nr_pages;
 	virt_addr->size = img_size;
 	virt_addr->offset = offset;
 	virt_addr->result = result;
@@ -757,12 +778,12 @@ static int rga_mm_map_virt_addr(struct rga_external_buffer *external_buffer,
 		if (virt_addr->shadow_head) {
 			real_offset = virt_addr->offset;
 			map_offset = 0;
-			map_size = (size_t)virt_addr->page_count << PAGE_SHIFT;
+			map_size = (size_t)virt_addr->nr_pages << PAGE_SHIFT;
 		} else {
 			real_offset = 0;
 			map_offset = virt_addr->offset;
 			map_size =
-				((size_t)virt_addr->page_count << PAGE_SHIFT) - virt_addr->offset;
+				((size_t)virt_addr->nr_pages << PAGE_SHIFT) - virt_addr->offset;
 		}
 	} else {
 		real_offset = 0;
@@ -771,7 +792,7 @@ static int rga_mm_map_virt_addr(struct rga_external_buffer *external_buffer,
 	}
 
 	sgt = rga_alloc_sgt(virt_addr->pages,
-			    virt_addr->page_count,
+			    virt_addr->nr_pages,
 			    map_offset,
 			    map_size, GFP_KERNEL);
 	if (IS_ERR(sgt)) {
@@ -884,7 +905,7 @@ static int rga_mm_map_phys_addr(struct rga_external_buffer *external_buffer,
 	int buffer_size;
 	size_t offset;
 	uint32_t mm_flag = 0;
-	uint32_t page_count;
+	uint32_t nr_pages;
 	phys_addr_t phys_addr, phys_addr_aligned;
 	struct page **pages = NULL;
 	struct sg_table *sgt = NULL;
@@ -926,22 +947,22 @@ static int rga_mm_map_phys_addr(struct rga_external_buffer *external_buffer,
 	if (scheduler->data->mmu == RGA_IOMMU) {
 		phys_addr_aligned = phys_addr & PAGE_MASK;
 		offset = phys_addr & (~PAGE_MASK);
-		page_count = RGA_GET_PAGE_COUNT(buffer_size + offset);
+		nr_pages = RGA_GET_NR_PAGES(buffer_size + offset);
 
-		pages = vzalloc(sizeof(struct page *) * page_count);
+		pages = vzalloc(sizeof(struct page *) * nr_pages);
 		if (pages == NULL) {
 			rga_err("%s can not alloc pages for phys_addr pages\n", __func__);
 			return -ENOMEM;
 		}
 
-		ret = rga_get_phys_addr_pages(pages, phys_addr_aligned, page_count);
+		ret = rga_get_phys_addr_pages(pages, phys_addr_aligned, nr_pages);
 		if (ret < 0) {
 			rga_err("failed to get pages from physical address: 0x%llx\n",
 				(unsigned long long)phys_addr);
 			goto free_pages;
 		}
 
-		sgt = rga_alloc_sgt(pages, page_count, offset, buffer_size, GFP_KERNEL);
+		sgt = rga_alloc_sgt(pages, nr_pages, offset, buffer_size, GFP_KERNEL);
 		if (IS_ERR(sgt)) {
 			rga_err("failed to alloc sgt\n");
 			ret = PTR_ERR(sgt);
@@ -1387,11 +1408,11 @@ static int rga_mm_set_mmu_flag(struct rga_job *job,
 
 static int rga_mm_sgt_to_page_table(struct sg_table *sg,
 				    uint32_t *page_table,
-				    int32_t pageCount,
+				    int32_t nr_pages,
 				    int32_t use_dma_address)
 {
 	uint32_t i;
-	unsigned long Address;
+	unsigned long addr;
 	uint32_t mapped_size = 0;
 	uint32_t len;
 	struct scatterlist *sgl = sg->sgl;
@@ -1418,24 +1439,24 @@ static int rga_mm_sgt_to_page_table(struct sg_table *sg,
 			 * address that is mapped to meet the device address
 			 * requirements.
 			 */
-			Address = sg_dma_address(sgl);
+			addr = sg_dma_address(sgl);
 		else
-			Address = sg_phys(sgl);
+			addr = sg_phys(sgl);
 
-		Address &= PAGE_MASK;
+		addr &= PAGE_MASK;
 
 		for (i = 0; i < len; i++) {
-			if (mapped_size + i >= pageCount) {
+			if (mapped_size + i >= nr_pages) {
 				break_flag = 1;
 				break;
 			}
-			page_table[mapped_size + i] = (uint32_t)(Address + (i << PAGE_SHIFT));
+			page_table[mapped_size + i] = (uint32_t)(addr + (i << PAGE_SHIFT));
 		}
 		if (break_flag)
 			break;
 		mapped_size += len;
 		sg_num += 1;
-	} while ((sgl = sg_next(sgl)) && (mapped_size < pageCount) && (sg_num < sg->orig_nents));
+	} while ((sgl = sg_next(sgl)) && (mapped_size < nr_pages) && (sg_num < sg->orig_nents));
 
 	return 0;
 }
@@ -1445,10 +1466,10 @@ static int rga_mm_set_mmu_base(struct rga_job *job,
 			       struct rga_job_buffer *job_buf)
 {
 	int ret;
-	int yrgb_count = 0;
-	int uv_count = 0;
-	int v_count = 0;
-	int page_count = 0;
+	int yrgb_nr_pages = 0;
+	int uv_nr_pages = 0;
+	int v_nr_pages = 0;
+	int nr_pages = 0;
 	int order = 0;
 	uint32_t *page_table = NULL;
 	struct sg_table *sgt = NULL;
@@ -1476,20 +1497,20 @@ static int rga_mm_set_mmu_base(struct rga_job *job,
 		if (job_buf->v_addr->virt_addr != NULL)
 			v_offset = job_buf->v_addr->virt_addr->offset;
 
-		yrgb_count = RGA_GET_PAGE_COUNT(yrgb_size + yrgb_offset);
-		uv_count = RGA_GET_PAGE_COUNT(uv_size + uv_offset);
-		v_count = RGA_GET_PAGE_COUNT(v_size + v_offset);
-		page_count = yrgb_count + uv_count + v_count;
+		yrgb_nr_pages = RGA_GET_NR_PAGES(yrgb_size + yrgb_offset);
+		uv_nr_pages = RGA_GET_NR_PAGES(uv_size + uv_offset);
+		v_nr_pages = RGA_GET_NR_PAGES(v_size + v_offset);
+		nr_pages = yrgb_nr_pages + uv_nr_pages + v_nr_pages;
 
-		if (page_count <= 0) {
-			rga_job_err(job, "page count cal error! yrba = %d, uv = %d, v = %d\n",
-				yrgb_count, uv_count, v_count);
+		if (nr_pages <= 0) {
+			rga_job_err(job, "page count cal error! yrgb = %d, uv = %d, v = %d\n",
+				yrgb_nr_pages, uv_nr_pages, v_nr_pages);
 			return -EFAULT;
 		}
 
 		if (job->flags & RGA_JOB_USE_HANDLE) {
 			page_table = (uint32_t *)rga_get_free_pages(GFP_KERNEL | GFP_DMA32,
-				&order, page_count * sizeof(uint32_t *));
+				&order, nr_pages * sizeof(uint32_t *));
 			if (page_table == NULL) {
 				rga_job_err(job, "%s can not alloc pages for page_table, order = %d\n",
 					__func__, order);
@@ -1498,7 +1519,7 @@ static int rga_mm_set_mmu_base(struct rga_job *job,
 		} else {
 			mutex_lock(&rga_drvdata->lock);
 
-			page_table = rga_mmu_buf_get(rga_drvdata->mmu_base, page_count);
+			page_table = rga_mmu_buf_get(rga_drvdata->mmu_base, nr_pages);
 			if (page_table == NULL) {
 				rga_err("mmu_buf get error!\n");
 				mutex_unlock(&rga_drvdata->lock);
@@ -1514,7 +1535,7 @@ static int rga_mm_set_mmu_base(struct rga_job *job,
 			ret = -EINVAL;
 			goto err_free_page_table;
 		}
-		rga_mm_sgt_to_page_table(sgt, page_table, yrgb_count, false);
+		rga_mm_sgt_to_page_table(sgt, page_table, yrgb_nr_pages, false);
 
 		sgt = rga_mm_lookup_sgt(job_buf->uv_addr);
 		if (sgt == NULL) {
@@ -1522,7 +1543,7 @@ static int rga_mm_set_mmu_base(struct rga_job *job,
 			ret = -EINVAL;
 			goto err_free_page_table;
 		}
-		rga_mm_sgt_to_page_table(sgt, page_table + yrgb_count, uv_count, false);
+		rga_mm_sgt_to_page_table(sgt, page_table + yrgb_nr_pages, uv_nr_pages, false);
 
 		sgt = rga_mm_lookup_sgt(job_buf->v_addr);
 		if (sgt == NULL) {
@@ -1530,25 +1551,26 @@ static int rga_mm_set_mmu_base(struct rga_job *job,
 			ret = -EINVAL;
 			goto err_free_page_table;
 		}
-		rga_mm_sgt_to_page_table(sgt, page_table + yrgb_count + uv_count, v_count, false);
+		rga_mm_sgt_to_page_table(sgt, page_table + yrgb_nr_pages + uv_nr_pages,
+					 v_nr_pages, false);
 
 		img->yrgb_addr = yrgb_offset;
-		img->uv_addr = (yrgb_count << PAGE_SHIFT) + uv_offset;
-		img->v_addr = ((yrgb_count + uv_count) << PAGE_SHIFT) + v_offset;
+		img->uv_addr = (yrgb_nr_pages << PAGE_SHIFT) + uv_offset;
+		img->v_addr = ((yrgb_nr_pages + uv_nr_pages) << PAGE_SHIFT) + v_offset;
 	} else {
 		if (job_buf->addr->virt_addr != NULL)
 			img_offset = job_buf->addr->virt_addr->offset;
 
-		page_count = RGA_GET_PAGE_COUNT(img_size + img_offset);
-		if (page_count < 0) {
-			rga_job_err(job, "page count cal error! yrba = %d, uv = %d, v = %d\n",
-				yrgb_count, uv_count, v_count);
+		nr_pages = RGA_GET_NR_PAGES(img_size + img_offset);
+		if (nr_pages <= 0) {
+			rga_job_err(job, "page count cal error! nr_pages = %d\n",
+				nr_pages);
 			return -EFAULT;
 		}
 
 		if (job->flags & RGA_JOB_USE_HANDLE) {
 			page_table = (uint32_t *)rga_get_free_pages(GFP_KERNEL | GFP_DMA32,
-				&order, page_count * sizeof(uint32_t *));
+				&order, nr_pages * sizeof(uint32_t *));
 			if (page_table == NULL) {
 				rga_job_err(job, "%s can not alloc pages for page_table, order = %d\n",
 					__func__, order);
@@ -1557,7 +1579,7 @@ static int rga_mm_set_mmu_base(struct rga_job *job,
 		} else {
 			mutex_lock(&rga_drvdata->lock);
 
-			page_table = rga_mmu_buf_get(rga_drvdata->mmu_base, page_count);
+			page_table = rga_mmu_buf_get(rga_drvdata->mmu_base, nr_pages);
 			if (page_table == NULL) {
 				rga_job_err(job, "mmu_buf get error!\n");
 				mutex_unlock(&rga_drvdata->lock);
@@ -1573,7 +1595,7 @@ static int rga_mm_set_mmu_base(struct rga_job *job,
 			ret = -EINVAL;
 			goto err_free_page_table;
 		}
-		rga_mm_sgt_to_page_table(sgt, page_table, page_count, false);
+		rga_mm_sgt_to_page_table(sgt, page_table, nr_pages, false);
 
 		img->yrgb_addr = img_offset;
 		rga_convert_addr(img, false);
@@ -1581,7 +1603,7 @@ static int rga_mm_set_mmu_base(struct rga_job *job,
 
 	job_buf->page_table = page_table;
 	job_buf->order = order;
-	job_buf->page_count = page_count;
+	job_buf->nr_pages = nr_pages;
 
 	return 0;
 

@@ -68,7 +68,7 @@
 };
 
 /* phy for pcie */
-&combphy2_psq {
+&combphy2 {
 	phy-supply = <&vcc3v3_sys>;
 	status = "okay";
 };
@@ -214,12 +214,12 @@
 	status = "okay";
 };
 
-&u2phy0_otg {
+&usb2phy0_otg {
 	phy-supply = <&vcc5v0_usb>;
 	status = "okay";
 };
 
-&usbdrd_dwc3 {
+&usb_host0_xhci {
 	status = "okay";
 };
 

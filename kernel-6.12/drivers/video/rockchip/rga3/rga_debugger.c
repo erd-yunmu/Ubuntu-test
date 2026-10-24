@@ -79,7 +79,7 @@ static ssize_t rga_debug_write(struct file *file, const char __user *ubuf,
 {
 	char buf[14];
 
-	if (len > sizeof(buf) - 1)
+	if (len == 0 || len >= sizeof(buf))
 		return -EINVAL;
 	if (copy_from_user(buf, ubuf, len))
 		return -EFAULT;
@@ -397,13 +397,13 @@ static ssize_t rga_dump_path_write(struct file *file, const char __user *ubuf,
 {
 	char buf[100];
 
-	if (len > sizeof(buf) - 1)
+	if (len == 0 || len >= sizeof(buf))
 		return -EINVAL;
 	if (copy_from_user(buf, ubuf, len))
 		return -EFAULT;
 	buf[len - 1] = '\0';
 
-	snprintf(g_dump_path, sizeof(buf), "%s", buf);
+	snprintf(g_dump_path, sizeof(g_dump_path), "%s", buf);
 	pr_info("dump path change to: %s\n", g_dump_path);
 
 	return len;
@@ -423,7 +423,7 @@ static ssize_t rga_dump_image_write(struct file *file, const char __user *ubuf,
 	int dump_count = 0;
 	char buf[14];
 
-	if (len > sizeof(buf) - 1)
+	if (len == 0 || len >= sizeof(buf))
 		return -EINVAL;
 	if (copy_from_user(buf, ubuf, len))
 		return -EFAULT;
@@ -511,7 +511,7 @@ static ssize_t rga_reset_write(struct file *file, const char __user *ubuf,
 	int reset_done = false;
 	struct rga_scheduler_t *scheduler = NULL;
 
-	if (len > sizeof(buf) - 1)
+	if (len == 0 || len >= sizeof(buf))
 		return -EINVAL;
 	if (copy_from_user(buf, ubuf, len))
 		return -EFAULT;
@@ -909,7 +909,7 @@ static int rga_dump_image_to_file(struct rga_internal_buffer *dump_buffer,
 		kvaddr += dump_buffer->dma_buffer->offset;
 		break;
 	case RGA_VIRTUAL_ADDRESS:
-		kvaddr = vmap(dump_buffer->virt_addr->pages, dump_buffer->virt_addr->page_count,
+		kvaddr = vmap(dump_buffer->virt_addr->pages, dump_buffer->virt_addr->nr_pages,
 			      VM_MAP, pgprot_writecombine(PAGE_KERNEL));
 		if (!kvaddr) {
 			pr_err("dump_vaddr vmap error!, 0x%lx\n",

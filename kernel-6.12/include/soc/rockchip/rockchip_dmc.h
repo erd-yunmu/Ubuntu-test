@@ -14,6 +14,7 @@
 #define __SOC_ROCKCHIP_DMC_H
 
 #include <linux/devfreq.h>
+#include <linux/mutex.h>
 
 /* for lcdc_type */
 #define SCREEN_NULL		0
@@ -47,6 +48,7 @@ struct rl_map_table {
 struct dmcfreq_common_info {
 	struct device *dev;
 	struct devfreq *devfreq;
+	struct mutex lock;
 	struct freq_map_table *vop_bw_tbl;
 	struct freq_map_table *vop_frame_bw_tbl;
 	struct rl_map_table *vop_pn_rl_tbl;
@@ -56,6 +58,8 @@ struct dmcfreq_common_info {
 	unsigned int read_latency;
 	unsigned int auto_freq_en;
 	unsigned int stall_time_ns;
+	bool is_in_suspend;
+	bool is_gov_stopped;
 	bool is_msch_rl_work_started;
 	int (*set_msch_readlatency)(unsigned int rl);
 };
@@ -78,6 +82,7 @@ int rockchip_dmcfreq_vop_bandwidth_init(struct dmcfreq_common_info *info);
 int rockchip_dmcfreq_vop_bandwidth_request(struct dmcfreq_vop_info *vop_info);
 void rockchip_dmcfreq_vop_bandwidth_update(struct dmcfreq_vop_info *vop_info);
 unsigned int rockchip_dmcfreq_get_stall_time_ns(void);
+void rockchip_dmcfreq_update_target(struct dmcfreq_common_info *info);
 #else
 static inline void rockchip_dmcfreq_lock(void)
 {
@@ -125,6 +130,10 @@ static inline unsigned int
 rockchip_dmcfreq_get_stall_time_ns(void)
 {
 	return 0;
+}
+
+static inline void rockchip_dmcfreq_update_target(struct dmcfreq_common_info *info)
+{
 }
 #endif
 

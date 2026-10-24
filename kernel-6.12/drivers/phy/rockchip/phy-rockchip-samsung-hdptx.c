@@ -21,6 +21,7 @@
 #include <linux/rational.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
+#include <linux/unaligned.h>
 
 #include "phy-hdmi.h"
 
@@ -268,7 +269,9 @@
 #define LN_TX_DRV_POST_LVL_CTRL_MASK	GENMASK(3, 0)
 /* LANE_REG(0305) */
 #define OVRD_LN_TX_DRV_PRE_LVL_CTRL_MASK	BIT(6)
-#define LN_TX_DRV_PRE_LVL_CTRL_MASK	GENMASK(5, 2)
+#define LN_TX_DRV_PRE_LVL_CTRL_MASK		GENMASK(5, 2)
+#define OVRD_LN_TX_DRV_IDRV_EN_MASK		BIT(1)
+#define LN_TX_DRV_IDRV_EN_MASK			BIT(0)
 /* LANE_REG(0306) */
 #define LN_ANA_TX_DRV_IDRV_IDN_CTRL_MASK	GENMASK(7, 5)
 #define LN_ANA_TX_DRV_IDRV_IUP_CTRL_MASK	GENMASK(4, 2)
@@ -391,6 +394,24 @@ struct tx_drv_ctrl {
 	u8 tx_jeq_odd_ctrl;
 };
 
+#define HDPTX_PHY_TAB_REGS_PER_LANE	5
+#define HDPTX_PHY_LANES_0_2_COUNT	3
+#define HDPTX_PHY_LANE3			3
+#define HDPTX_PHY_TAB_ENTRY_SIZE	(sizeof(__be64) + 2 * HDPTX_PHY_TAB_REGS_PER_LANE)
+
+/*
+ * Each DTS entry carries separate configurations for lane 3 and lanes 0~2.
+ * Lane 3 is the clock lane in TMDS mode and the fourth data lane in FRL mode.
+ * The PHY mode distinguishes HDMI from DP, while the rate distinguishes
+ * TMDS from FRL.
+ */
+struct hdptx_phy_config {
+	u64 rate;
+	enum phy_mode mode;
+	struct tx_drv_ctrl lane3;
+	struct tx_drv_ctrl lanes_0_2;
+};
+
 enum rk_hdptx_reset {
 	RST_APB = 0,
 	RST_INIT,
@@ -434,6 +455,10 @@ struct rk_hdptx_phy {
 	unsigned int link_rate;
 	unsigned int lanes;
 	bool dp_mode;
+
+	/* optional DTS phy-table for hdmi/edp configuration */
+	struct hdptx_phy_config *phy_cfg;
+	int phy_cfg_count;
 };
 
 struct ffe_cfg {
@@ -474,6 +499,8 @@ static const struct ropll_config rk_hdptx_tmds_ropll_cfg[] = {
 	{  50250000ULL,   84,    84,    1,    1,    7,  1,   11,    1,   4,  5,   4,   11, },
 	{  40000000ULL,  100,   100,    1,    1,   11,  0,    9,    0,   5,  0,  20,   24, },
 	{  33750000ULL,  112,   112,    1,    1,   15,  1,    2,    0,   1,  5,   1,    1, },
+	{  31500000ULL,  105,   105,    1,    1,   15,  0,    0,    0,   0,  0,   0,    0, },
+	{  30240000ULL,  101,   101,    1,    1,   15,  1,   65,    1,  16,  5,   3,   13, },
 	{  27000000ULL,   90,    90,    1,    1,   15,  0,    9,    0,   5,  0,  20,   24, },
 	{  25175000ULL,   84,    84,    1,    1,   15,  1,  168,    1,  16,  4,   1,    1, },
 };
@@ -733,9 +760,29 @@ static const struct reg_sequence rk_hdptx_tmds_lntop_lowbr_seq[] = {
 	REG_SEQ0(LNTOP_REG(0205), 0x1f),
 };
 
+/* HDMI frl mode per-lane TX driver-strength parameters (same for all lanes). */
+static const struct tx_drv_ctrl rk_hdptx_frl_tx_drv_ctrl = {
+	.tx_drv_lvl_ctrl			= 0x0f,
+	.tx_drv_post_lvl_ctrl			= 0x04,
+	.ana_tx_drv_idrv_idn_ctrl		= 0x7,
+	.ana_tx_drv_idrv_iup_ctrl		= 0x7,
+	.ana_tx_drv_accdrv_en			= 0x0,
+	.ana_tx_drv_accdrv_ctrl			= 0x4,
+	.tx_drv_pre_lvl_ctrl			= 0x03,
+};
+
+/* HDMI tmds mode per-lane TX driver-strength parameters. */
+static const struct tx_drv_ctrl rk_hdptx_tmds_tx_drv_ctrl = {
+	.tx_drv_lvl_ctrl			= 0x0f,
+	.tx_drv_post_lvl_ctrl			= 0x00,
+	.ana_tx_drv_idrv_idn_ctrl		= 0x0,
+	.ana_tx_drv_idrv_iup_ctrl		= 0x7,
+	.ana_tx_drv_accdrv_en			= 0x0,
+	.ana_tx_drv_accdrv_ctrl			= 0x4,
+	.tx_drv_pre_lvl_ctrl			= 0x00,
+};
+
 static const struct reg_sequence rk_hdptx_common_lane_init_seq[] = {
-	REG_SEQ0(LANE_REG(0303), 0x0c),
-	REG_SEQ0(LANE_REG(0307), 0x20),
 	REG_SEQ0(LANE_REG(030a), 0x17),
 	REG_SEQ0(LANE_REG(030b), 0x77),
 	REG_SEQ0(LANE_REG(030c), 0x77),
@@ -747,8 +794,6 @@ static const struct reg_sequence rk_hdptx_common_lane_init_seq[] = {
 	REG_SEQ0(LANE_REG(031b), 0x01),
 	REG_SEQ0(LANE_REG(031f), 0x15),
 	REG_SEQ0(LANE_REG(0320), 0xa0),
-	REG_SEQ0(LANE_REG(0403), 0x0c),
-	REG_SEQ0(LANE_REG(0407), 0x20),
 	REG_SEQ0(LANE_REG(040a), 0x17),
 	REG_SEQ0(LANE_REG(040b), 0x77),
 	REG_SEQ0(LANE_REG(040c), 0x77),
@@ -760,8 +805,6 @@ static const struct reg_sequence rk_hdptx_common_lane_init_seq[] = {
 	REG_SEQ0(LANE_REG(041b), 0x01),
 	REG_SEQ0(LANE_REG(041f), 0x15),
 	REG_SEQ0(LANE_REG(0420), 0xa0),
-	REG_SEQ0(LANE_REG(0503), 0x0c),
-	REG_SEQ0(LANE_REG(0507), 0x20),
 	REG_SEQ0(LANE_REG(050a), 0x17),
 	REG_SEQ0(LANE_REG(050b), 0x77),
 	REG_SEQ0(LANE_REG(050c), 0x77),
@@ -773,8 +816,6 @@ static const struct reg_sequence rk_hdptx_common_lane_init_seq[] = {
 	REG_SEQ0(LANE_REG(051b), 0x01),
 	REG_SEQ0(LANE_REG(051f), 0x15),
 	REG_SEQ0(LANE_REG(0520), 0xa0),
-	REG_SEQ0(LANE_REG(0603), 0x0c),
-	REG_SEQ0(LANE_REG(0607), 0x20),
 	REG_SEQ0(LANE_REG(060a), 0x17),
 	REG_SEQ0(LANE_REG(060b), 0x77),
 	REG_SEQ0(LANE_REG(060c), 0x77),
@@ -793,26 +834,6 @@ static const struct reg_sequence rk_hdptx_frl_lane_init_seq[] = {
 	REG_SEQ0(LANE_REG(0412), 0x3c),
 	REG_SEQ0(LANE_REG(0512), 0x3c),
 	REG_SEQ0(LANE_REG(0612), 0x3c),
-	REG_SEQ0(LANE_REG(0303), 0x2f),
-	REG_SEQ0(LANE_REG(0403), 0x2f),
-	REG_SEQ0(LANE_REG(0503), 0x2f),
-	REG_SEQ0(LANE_REG(0603), 0x2f),
-	REG_SEQ0(LANE_REG(0305), 0x03),
-	REG_SEQ0(LANE_REG(0405), 0x03),
-	REG_SEQ0(LANE_REG(0505), 0x03),
-	REG_SEQ0(LANE_REG(0605), 0x03),
-	REG_SEQ0(LANE_REG(0306), 0xfc),
-	REG_SEQ0(LANE_REG(0406), 0xfc),
-	REG_SEQ0(LANE_REG(0506), 0xfc),
-	REG_SEQ0(LANE_REG(0606), 0xfc),
-	REG_SEQ0(LANE_REG(0305), 0x4f),
-	REG_SEQ0(LANE_REG(0405), 0x4f),
-	REG_SEQ0(LANE_REG(0505), 0x4f),
-	REG_SEQ0(LANE_REG(0605), 0x4f),
-	REG_SEQ0(LANE_REG(0304), 0x14),
-	REG_SEQ0(LANE_REG(0404), 0x14),
-	REG_SEQ0(LANE_REG(0504), 0x14),
-	REG_SEQ0(LANE_REG(0604), 0x14),
 	/* Keep Inter-Pair Skew in the limits */
 	REG_SEQ0(LANE_REG(031e), 0x02),
 	REG_SEQ0(LANE_REG(041e), 0x02),
@@ -825,24 +846,62 @@ static const struct reg_sequence rk_hdptx_tmds_lane_init_seq[] = {
 	REG_SEQ0(LANE_REG(0412), 0x00),
 	REG_SEQ0(LANE_REG(0512), 0x00),
 	REG_SEQ0(LANE_REG(0612), 0x00),
-	REG_SEQ0(LANE_REG(0303), 0x2f),
-	REG_SEQ0(LANE_REG(0403), 0x2f),
-	REG_SEQ0(LANE_REG(0503), 0x2f),
-	REG_SEQ0(LANE_REG(0603), 0x2f),
-	REG_SEQ0(LANE_REG(0305), 0x03),
-	REG_SEQ0(LANE_REG(0405), 0x03),
-	REG_SEQ0(LANE_REG(0505), 0x03),
-	REG_SEQ0(LANE_REG(0605), 0x03),
-	REG_SEQ0(LANE_REG(0306), 0x1c),
-	REG_SEQ0(LANE_REG(0406), 0x1c),
-	REG_SEQ0(LANE_REG(0506), 0x1c),
-	REG_SEQ0(LANE_REG(0606), 0x1c),
 	/* Keep Inter-Pair Skew in the limits */
 	REG_SEQ0(LANE_REG(031e), 0x02),
 	REG_SEQ0(LANE_REG(041e), 0x02),
 	REG_SEQ0(LANE_REG(051e), 0x02),
 	REG_SEQ0(LANE_REG(061e), 0x0a),
 };
+
+static void rk_hdptx_parse_lane_drv_ctrl(const u8 *regs, struct tx_drv_ctrl *ctrl)
+{
+	u8 reg;
+
+	/* Decode registers 0303~0307 and discard the OVRD bits. */
+	reg = regs[0];
+	ctrl->tx_drv_lvl_ctrl = FIELD_GET(LN_TX_DRV_LVL_CTRL_MASK, reg);
+
+	reg = regs[1];
+	ctrl->tx_drv_post_lvl_ctrl = FIELD_GET(LN_TX_DRV_POST_LVL_CTRL_MASK, reg);
+
+	reg = regs[2];
+	ctrl->tx_drv_pre_lvl_ctrl = FIELD_GET(LN_TX_DRV_PRE_LVL_CTRL_MASK, reg);
+
+	reg = regs[3];
+	ctrl->ana_tx_drv_idrv_idn_ctrl = FIELD_GET(LN_ANA_TX_DRV_IDRV_IDN_CTRL_MASK, reg);
+	ctrl->ana_tx_drv_idrv_iup_ctrl = FIELD_GET(LN_ANA_TX_DRV_IDRV_IUP_CTRL_MASK, reg);
+	ctrl->ana_tx_drv_accdrv_en = FIELD_GET(LN_ANA_TX_DRV_ACCDRV_EN_MASK, reg);
+
+	reg = regs[4];
+	ctrl->ana_tx_drv_accdrv_ctrl = FIELD_GET(LN_ANA_TX_DRV_ACCDRV_CTRL_MASK, reg);
+	/* 0307[6] pol_sel is set by the helper per mode. */
+}
+
+static int rk_hdptx_parse_phy_table(struct rk_hdptx_phy *hdptx, const u8 *phy_table,
+				    int num_entries)
+{
+	const u8 *entry;
+	int i;
+
+	for (i = 0; i < num_entries; i++) {
+		entry = &phy_table[i * HDPTX_PHY_TAB_ENTRY_SIZE];
+
+		hdptx->phy_cfg[i].rate = get_unaligned_be64(entry);
+		hdptx->phy_cfg[i].mode = PHY_MODE_HDMI;
+
+		rk_hdptx_parse_lane_drv_ctrl(&entry[sizeof(__be64)], &hdptx->phy_cfg[i].lane3);
+		rk_hdptx_parse_lane_drv_ctrl(&entry[sizeof(__be64) + HDPTX_PHY_TAB_REGS_PER_LANE],
+					     &hdptx->phy_cfg[i].lanes_0_2);
+
+		/* The table must be sorted ascending by rate. */
+		if (i && hdptx->phy_cfg[i].rate < hdptx->phy_cfg[i - 1].rate) {
+			dev_err(hdptx->dev, "phy-table must be sorted ascending by rate\n");
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
 
 struct tx_pll_ctrl {
 	u8 mdiv;
@@ -1467,19 +1526,118 @@ static int rk_hdptx_pll_cmn_config(struct rk_hdptx_phy *hdptx)
 	return rk_hdptx_frl_lcpll_cmn_config(hdptx);
 }
 
+/*
+ * Write the per-lane TX driver-strength registers (LANE_REG 0303~0307)
+ * shared by the DP and HDMI paths.
+ */
+static void rk_hdptx_lane_write_drv_ctrl(struct rk_hdptx_phy *hdptx,
+					 const struct tx_drv_ctrl *ctrl, u8 lane,
+					 enum phy_mode mode)
+{
+	bool is_hdmi = mode == PHY_MODE_HDMI;
+	bool is_frl = is_hdmi && hdptx->hdmi_cfg.rate > HDMI20_MAX_RATE;
+	u32 offset = lane * 0x400;
+	u32 mask, val;
+
+	mask = OVRD_LN_TX_DRV_LVL_CTRL_MASK | LN_TX_DRV_LVL_CTRL_MASK;
+	val = FIELD_PREP(OVRD_LN_TX_DRV_LVL_CTRL_MASK, 0x1) |
+	      FIELD_PREP(LN_TX_DRV_LVL_CTRL_MASK, ctrl->tx_drv_lvl_ctrl);
+	regmap_update_bits(hdptx->regmap, LANE_REG(0303) + offset, mask, val);
+
+	mask = OVRD_LN_TX_DRV_POST_LVL_CTRL_MASK | LN_TX_DRV_POST_LVL_CTRL_MASK;
+	val = FIELD_PREP(OVRD_LN_TX_DRV_POST_LVL_CTRL_MASK, 0x1) |
+	      FIELD_PREP(LN_TX_DRV_POST_LVL_CTRL_MASK, ctrl->tx_drv_post_lvl_ctrl);
+	regmap_update_bits(hdptx->regmap, LANE_REG(0304) + offset, mask, val);
+
+	mask = OVRD_LN_TX_DRV_PRE_LVL_CTRL_MASK | LN_TX_DRV_PRE_LVL_CTRL_MASK;
+	val = FIELD_PREP(LN_TX_DRV_PRE_LVL_CTRL_MASK, ctrl->tx_drv_pre_lvl_ctrl);
+	if (is_hdmi) {
+		mask |= OVRD_LN_TX_DRV_IDRV_EN_MASK | LN_TX_DRV_IDRV_EN_MASK;
+		val |= FIELD_PREP(OVRD_LN_TX_DRV_PRE_LVL_CTRL_MASK, is_frl) |
+		       FIELD_PREP(OVRD_LN_TX_DRV_IDRV_EN_MASK, 0x1) |
+		       FIELD_PREP(LN_TX_DRV_IDRV_EN_MASK, 0x1);
+	} else {
+		val |= FIELD_PREP(OVRD_LN_TX_DRV_PRE_LVL_CTRL_MASK, 0x1);
+	}
+	regmap_update_bits(hdptx->regmap, LANE_REG(0305) + offset, mask, val);
+
+	mask = LN_ANA_TX_DRV_IDRV_IDN_CTRL_MASK | LN_ANA_TX_DRV_IDRV_IUP_CTRL_MASK |
+	       LN_ANA_TX_DRV_ACCDRV_EN_MASK;
+	val = FIELD_PREP(LN_ANA_TX_DRV_IDRV_IDN_CTRL_MASK, ctrl->ana_tx_drv_idrv_idn_ctrl) |
+	      FIELD_PREP(LN_ANA_TX_DRV_IDRV_IUP_CTRL_MASK, ctrl->ana_tx_drv_idrv_iup_ctrl) |
+	      FIELD_PREP(LN_ANA_TX_DRV_ACCDRV_EN_MASK, ctrl->ana_tx_drv_accdrv_en);
+	regmap_update_bits(hdptx->regmap, LANE_REG(0306) + offset, mask, val);
+
+	mask = LN_ANA_TX_DRV_ACCDRV_POL_SEL_MASK | LN_ANA_TX_DRV_ACCDRV_CTRL_MASK;
+	val = FIELD_PREP(LN_ANA_TX_DRV_ACCDRV_POL_SEL_MASK, !is_hdmi) |
+	      FIELD_PREP(LN_ANA_TX_DRV_ACCDRV_CTRL_MASK, ctrl->ana_tx_drv_accdrv_ctrl);
+	regmap_update_bits(hdptx->regmap, LANE_REG(0307) + offset, mask, val);
+}
+
+static void rk_hdptx_phy_apply_lane_cfg(struct rk_hdptx_phy *hdptx, enum phy_mode mode)
+{
+	struct hdptx_phy_config *cfg;
+	bool is_frl = hdptx->hdmi_cfg.rate > HDMI20_MAX_RATE;
+	bool cfg_is_frl;
+	bool found = false;
+	int lane;
+
+	if (!hdptx->phy_cfg)
+		return;
+
+	/*
+	 * Pick the first entry for the requested PHY mode and HDMI rate range
+	 * whose rate is not below the requested rate. The table is sorted by
+	 * rate in probe().
+	 */
+	for (cfg = hdptx->phy_cfg; cfg < hdptx->phy_cfg + hdptx->phy_cfg_count; cfg++) {
+		if (cfg->mode != mode)
+			continue;
+		cfg_is_frl = cfg->rate > HDMI20_MAX_RATE;
+		if (mode == PHY_MODE_HDMI && cfg_is_frl != is_frl)
+			continue;
+		if (hdptx->hdmi_cfg.rate <= cfg->rate) {
+			found = true;
+			break;
+		}
+	}
+
+	if (!found) {
+		dev_warn(hdptx->dev, "no phy-table %s entry covers rate %llu Hz\n",
+			 is_frl ? "FRL" : "TMDS", hdptx->hdmi_cfg.rate);
+		return;
+	}
+
+	for (lane = 0; lane < HDPTX_PHY_LANES_0_2_COUNT; lane++)
+		rk_hdptx_lane_write_drv_ctrl(hdptx, &cfg->lanes_0_2, lane, mode);
+
+	rk_hdptx_lane_write_drv_ctrl(hdptx, &cfg->lane3, HDPTX_PHY_LANE3, mode);
+}
+
 static int rk_hdptx_frl_lcpll_mode_config(struct rk_hdptx_phy *hdptx)
 {
+	int lane;
+
 	rk_hdptx_multi_reg_write(hdptx, rk_hdptx_common_sb_init_seq);
 	rk_hdptx_multi_reg_write(hdptx, rk_hdptx_frl_lntop_init_seq);
 
 	rk_hdptx_multi_reg_write(hdptx, rk_hdptx_common_lane_init_seq);
 	rk_hdptx_multi_reg_write(hdptx, rk_hdptx_frl_lane_init_seq);
 
+	for (lane = 0; lane < 4; lane++)
+		rk_hdptx_lane_write_drv_ctrl(hdptx, &rk_hdptx_frl_tx_drv_ctrl, lane,
+					     PHY_MODE_HDMI);
+
+	/* Override with DTS-configured lane settings if present */
+	rk_hdptx_phy_apply_lane_cfg(hdptx, PHY_MODE_HDMI);
+
 	return rk_hdptx_post_enable_lane(hdptx);
 }
 
 static int rk_hdptx_tmds_ropll_mode_config(struct rk_hdptx_phy *hdptx)
 {
+	int lane;
+
 	rk_hdptx_multi_reg_write(hdptx, rk_hdptx_common_sb_init_seq);
 
 	regmap_write(hdptx->regmap, LNTOP_REG(0200), 0x06);
@@ -1496,6 +1654,13 @@ static int rk_hdptx_tmds_ropll_mode_config(struct rk_hdptx_phy *hdptx)
 
 	rk_hdptx_multi_reg_write(hdptx, rk_hdptx_common_lane_init_seq);
 	rk_hdptx_multi_reg_write(hdptx, rk_hdptx_tmds_lane_init_seq);
+
+	for (lane = 0; lane < 4; lane++)
+		rk_hdptx_lane_write_drv_ctrl(hdptx, &rk_hdptx_tmds_tx_drv_ctrl, lane,
+					     PHY_MODE_HDMI);
+
+	/* Override with DTS-configured lane settings if present */
+	rk_hdptx_phy_apply_lane_cfg(hdptx, PHY_MODE_HDMI);
 
 	return rk_hdptx_post_enable_lane(hdptx);
 }
@@ -2358,39 +2523,7 @@ static void rk_hdptx_phy_set_voltage(struct rk_hdptx_phy *hdptx,
 		break;
 	}
 
-	regmap_update_bits(hdptx->regmap, LANE_REG(0303) + offset,
-			   OVRD_LN_TX_DRV_LVL_CTRL_MASK | LN_TX_DRV_LVL_CTRL_MASK,
-			   FIELD_PREP(OVRD_LN_TX_DRV_LVL_CTRL_MASK, 0x1) |
-			   FIELD_PREP(LN_TX_DRV_LVL_CTRL_MASK,
-				      ctrl->tx_drv_lvl_ctrl));
-	regmap_update_bits(hdptx->regmap, LANE_REG(0304) + offset,
-			   OVRD_LN_TX_DRV_POST_LVL_CTRL_MASK |
-			   LN_TX_DRV_POST_LVL_CTRL_MASK,
-			   FIELD_PREP(OVRD_LN_TX_DRV_POST_LVL_CTRL_MASK, 0x1) |
-			   FIELD_PREP(LN_TX_DRV_POST_LVL_CTRL_MASK,
-				      ctrl->tx_drv_post_lvl_ctrl));
-	regmap_update_bits(hdptx->regmap, LANE_REG(0305) + offset,
-			   OVRD_LN_TX_DRV_PRE_LVL_CTRL_MASK |
-			   LN_TX_DRV_PRE_LVL_CTRL_MASK,
-			   FIELD_PREP(OVRD_LN_TX_DRV_PRE_LVL_CTRL_MASK, 0x1) |
-			   FIELD_PREP(LN_TX_DRV_PRE_LVL_CTRL_MASK,
-				      ctrl->tx_drv_pre_lvl_ctrl));
-	regmap_update_bits(hdptx->regmap, LANE_REG(0306) + offset,
-			   LN_ANA_TX_DRV_IDRV_IDN_CTRL_MASK |
-			   LN_ANA_TX_DRV_IDRV_IUP_CTRL_MASK |
-			   LN_ANA_TX_DRV_ACCDRV_EN_MASK,
-			   FIELD_PREP(LN_ANA_TX_DRV_IDRV_IDN_CTRL_MASK,
-				      ctrl->ana_tx_drv_idrv_idn_ctrl) |
-			   FIELD_PREP(LN_ANA_TX_DRV_IDRV_IUP_CTRL_MASK,
-				      ctrl->ana_tx_drv_idrv_iup_ctrl) |
-			   FIELD_PREP(LN_ANA_TX_DRV_ACCDRV_EN_MASK,
-				      ctrl->ana_tx_drv_accdrv_en));
-	regmap_update_bits(hdptx->regmap, LANE_REG(0307) + offset,
-			   LN_ANA_TX_DRV_ACCDRV_POL_SEL_MASK |
-			   LN_ANA_TX_DRV_ACCDRV_CTRL_MASK,
-			   FIELD_PREP(LN_ANA_TX_DRV_ACCDRV_POL_SEL_MASK, 0x1) |
-			   FIELD_PREP(LN_ANA_TX_DRV_ACCDRV_CTRL_MASK,
-				      ctrl->ana_tx_drv_accdrv_ctrl));
+	rk_hdptx_lane_write_drv_ctrl(hdptx, ctrl, lane, PHY_MODE_DP);
 
 	regmap_update_bits(hdptx->regmap, LANE_REG(030a) + offset,
 			   LN_ANA_TX_JEQ_EN_MASK,
@@ -2991,7 +3124,8 @@ static int rk_hdptx_phy_probe(struct platform_device *pdev)
 	struct rk_hdptx_phy *hdptx;
 	struct resource *res;
 	void __iomem *regs;
-	int ret, id;
+	const u8 *phy_table;
+	int ret, id, phy_table_len, phy_table_size;
 
 	hdptx = devm_kzalloc(dev, sizeof(*hdptx), GFP_KERNEL);
 	if (!hdptx)
@@ -3068,6 +3202,30 @@ static int rk_hdptx_phy_probe(struct platform_device *pdev)
 	 */
 	debugfs_remove(hdptx->phy->debugfs);
 	hdptx->phy->debugfs = NULL;
+
+	if (of_property_present(dev->of_node, "rockchip,phy-table")) {
+		phy_table = of_get_property(dev->of_node, "rockchip,phy-table", &phy_table_len);
+		if (!phy_table || phy_table_len <= 0 || phy_table_len % HDPTX_PHY_TAB_ENTRY_SIZE) {
+			dev_err(dev, "Invalid phy cfg table format!\n");
+			return -EINVAL;
+		}
+
+		phy_table_size = phy_table_len / HDPTX_PHY_TAB_ENTRY_SIZE;
+
+		hdptx->phy_cfg = devm_kcalloc(dev, phy_table_size,
+					      sizeof(*hdptx->phy_cfg), GFP_KERNEL);
+		if (!hdptx->phy_cfg)
+			return -ENOMEM;
+		hdptx->phy_cfg_count = phy_table_size;
+
+		ret = rk_hdptx_parse_phy_table(hdptx, phy_table, phy_table_size);
+		if (ret)
+			return ret;
+
+		dev_info(dev, "use DTS phy-table config (%d entries)\n", phy_table_size);
+	} else {
+		dev_dbg(dev, "use default hdmi phy lane config\n");
+	}
 
 	phy_set_drvdata(hdptx->phy, hdptx);
 	phy_set_bus_width(hdptx->phy, 8);

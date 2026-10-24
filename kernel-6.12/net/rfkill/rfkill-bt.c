@@ -127,10 +127,10 @@ static int rfkill_rk_power_key_up(void)
 	if (!power_key_dev)
 		return -ENODEV;
 
-	input_report_key(power_key_dev, KEY_POWER, 1);
+	input_report_key(power_key_dev, KEY_WAKEUP, 1);
 	input_sync(power_key_dev);
 	msleep(20);
-	input_report_key(power_key_dev, KEY_POWER, 0);
+	input_report_key(power_key_dev, KEY_WAKEUP, 0);
 	input_sync(power_key_dev);
 
 	return 0;
@@ -301,7 +301,7 @@ static int rfkill_rk_set_power(void *data, bool blocked)
 
 		if (wake_host->io) {
 			LOG("%s: set bt wake_host high!\n", __func__);
-			gpiod_direction_output(wake_host->io, 1);
+			gpiod_direction_output_raw(wake_host->io, 1);
 			msleep(20);
 		}
 		if (poweron->io) {
@@ -438,6 +438,29 @@ static void rfkill_rk_pm_complete(struct device *dev)
 		DBG("Enable UART_RTS\n");
 		gpiod_direction_output(rts->io, 1);
 		pinctrl_select_state(rfkill->pdata->pinctrl, rts->default_state);
+	}
+}
+
+static void rfkill_rk_shutdown(struct platform_device *pdev)
+{
+	struct rfkill_rk_data *rfkill = platform_get_drvdata(pdev);
+	struct rfkill_rk_irq *wake_host_irq;
+
+	LOG("Enter %s power:%d\n", __func__, bt_power_state);
+
+	if (!rfkill)
+		return;
+
+	if (system_state != SYSTEM_POWER_OFF)
+		return;
+
+	wake_host_irq = &rfkill->pdata->wake_host_irq;
+
+	// enable bt wakeup host
+	DBG("enable irq for bt wakeup host\n");
+	if (wake_host_irq->gpio.io && bt_power_state) {
+		enable_irq(wake_host_irq->irq);
+		enable_irq_wake(wake_host_irq->irq);
 	}
 }
 
@@ -671,7 +694,7 @@ static int rfkill_rk_register_power_key(struct device *dev)
 	power_key_dev->id.bustype = BUS_HOST;
 
 	power_key_dev->evbit[0] = BIT_MASK(EV_KEY);
-	set_bit(KEY_POWER, power_key_dev->keybit);
+	set_bit(KEY_WAKEUP, power_key_dev->keybit);
 
 	ret = input_register_device(power_key_dev);
 	if (ret) {
@@ -846,6 +869,7 @@ MODULE_DEVICE_TABLE(of, bt_platdata_of_match);
 static struct platform_driver rfkill_rk_driver = {
 	.probe = rfkill_rk_probe,
 	.remove = rfkill_rk_remove,
+	.shutdown = rfkill_rk_shutdown,
 	.driver = {
 		.name = "rfkill_bt",
 		.owner = THIS_MODULE,

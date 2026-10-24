@@ -1264,6 +1264,7 @@
 
 		nvmem-cells = <&log_leakage>, <&logic_opp_info>, <&specification_serial_number>;
 		nvmem-cell-names = "leakage", "opp-info", "specification_serial_number";
+		rockchip,supported-hw;
 
 		rockchip,early-min-microvolt = <0 750000>; /* <vdd_ddr vdd_logic> */
 
@@ -5660,7 +5661,7 @@
 		arm,pl330-periph-burst;
 	};
 
-	i3c0: i3c-master@2abe0000 {
+	i3c0: i3c@2abe0000 {
 		compatible = "rockchip,i3c-master";
 		reg = <0x0 0x2abe0000 0x0 0x1000>;
 		interrupts = <GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH>;
@@ -5677,7 +5678,7 @@
 		status = "disabled";
 	};
 
-	i3c1: i3c-master@2abf0000 {
+	i3c1: i3c@2abf0000 {
 		compatible = "rockchip,i3c-master";
 		reg = <0x0 0x2abf0000 0x0 0x1000>;
 		interrupts = <GIC_SPI 99 IRQ_TYPE_LEVEL_HIGH>;
@@ -6608,6 +6609,7 @@
 		reset-names = "combphy-apb", "combphy";
 		rockchip,pipe-grf = <&php_grf>;
 		rockchip,pipe-phy-grf = <&pipe_phy1_grf>;
+		rockchip,u3-port-num = <1>;
 		status = "disabled";
 	};
 

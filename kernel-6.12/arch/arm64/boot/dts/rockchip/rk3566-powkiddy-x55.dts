@@ -343,7 +343,7 @@
 	};
 };
 
-&combphy1_usq {
+&combphy1 {
 	status = "okay";
 };
 
@@ -879,13 +879,13 @@
 	status = "okay";
 };
 
-&usbdrd_dwc3 {
-	phys = <&u2phy0_otg>;
+&usb_host0_xhci {
+	phys = <&usb2phy0_otg>;
 	phy-names = "usb2-phy";
 	status = "okay";
 };
 
-&usbhost_dwc3 {
+&usb_host1_xhci {
 	status = "okay";
 };
 
@@ -893,11 +893,11 @@
 	status = "okay";
 };
 
-&u2phy0_otg {
+&usb2phy0_otg {
 	status = "okay";
 };
 
-&u2phy0_host {
+&usb2phy0_host {
 	phy-supply = <&vcc5v0_host>;
 	status = "okay";
 };

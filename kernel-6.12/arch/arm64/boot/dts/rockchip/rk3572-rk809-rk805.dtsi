@@ -14,10 +14,10 @@
 		precharge-current-microamp = <180000>;
 		precharge-upper-limit-microvolt = <3600000>;
 		charge-term-current-microamp = <300000>;
-		constant-charge-current-max-microamp = <3000000>;
-		constant-charge-voltage-max-microvolt = <4200000>;
+		constant-charge-current-max-microamp = <10000000>;
+		constant-charge-voltage-max-microvolt = <4400000>;
 		factory-internal-resistance-micro-ohms = <80>;
-		voltage-max-design-microvolt = <4200000>;
+		voltage-max-design-microvolt = <4400000>;
 		voltage-min-design-microvolt = <3000000>;
 	};
 
@@ -105,6 +105,7 @@
 		pinctrl-names = "pmic-sleep";
 		pinctrl-0 = <&soc_slppin_slp>;
 
+		rockchip,clk-32k-always-on;
 		rockchip,system-power-controller;
 		rockchip,shutdown-priority = <0>;
 		rockchip,shutdown-voltage-threshold-mv = <2800>;
@@ -361,6 +362,7 @@
 
 		#clock-cells = <1>;
 		clock-output-names = "rk805-clkout1", "rk805-clkout2";
+		rockchip,clk-32k-always-on;
 
 		rockchip,system-power-controller;
 		wakeup-source;
@@ -464,8 +466,8 @@
 
 			vcc_3v3_micbias: LDO_REG3 {
 				regulator-name = "vcc_3v3_micbias";
-				regulator-min-microvolt = <3300000>;
-				regulator-max-microvolt = <3300000>;
+				regulator-min-microvolt = <3000000>;
+				regulator-max-microvolt = <3000000>;
 				regulator-always-on;
 				regulator-boot-on;
 				regulator-state-mem {

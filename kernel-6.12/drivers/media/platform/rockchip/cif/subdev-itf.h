@@ -9,6 +9,7 @@
 #define _RKCIF_SDITF_H
 
 #include <linux/mutex.h>
+#include <linux/compiler.h>
 #include <media/media-device.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
@@ -130,14 +131,31 @@ struct sditf_priv {
 	u32 effect_exp_cnt;
 	int free_buf_delay_cnt;
 	bool is_toisp_off;
+	bool is_stopping;
 	bool is_buf_init;
+	/* Set by RKISP_VICAP_CMD_MULTI_ONLINE when multi virtual-ISP online. */
 	bool is_multi_online;
 	bool is_free_thunderboot_buf;
 };
 
+/*
+ * ONLINE_UNITE + is_multi_online: dual-cam half-passthrough with
+ * rdbk-like buf rotation across ISP time-share.
+ * Single-cam ONLINE_UNITE (!is_multi_online) follows fixed right-half
+ * buf (HDR2-online-long style) and is handled by
+ * rdbk_mode < RKISP_VICAP_RDBK_AIQ && !sditf_is_online_unite_multi().
+ */
+static inline bool sditf_is_online_unite_multi(const struct sditf_priv *priv)
+{
+	return priv &&
+	       priv->mode.rdbk_mode == RKISP_VICAP_ONLINE_UNITE &&
+	       READ_ONCE(priv->is_multi_online);
+}
+
 extern struct platform_driver rkcif_subdev_driver;
 void sditf_change_to_online(struct sditf_priv *priv);
 void sditf_disable_immediately(struct sditf_priv *priv);
+void sditf_flip_apply_pending(struct rkcif_device *cif_dev);
 void sditf_event_exposure_notifier(struct sditf_priv *priv,
 					   struct sditf_effect_exp *effect_exp);
 void sditf_event_inc_sof(struct sditf_priv *priv);
