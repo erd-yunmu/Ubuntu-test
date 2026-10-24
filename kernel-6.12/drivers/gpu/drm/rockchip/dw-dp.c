@@ -3540,9 +3540,6 @@ static ssize_t dw_dp_aux_transfer(struct drm_dp_aux *aux,
 		 * transmission; resetting it restores link training.
 		 */
 		if (retry == 0) {
-			dev_warn_ratelimited(dp->dev,
-					     "AUX timeout, resetting (cmd=0x%x addr=0x%x)\n",
-					     msg->request, msg->address);
 			dw_dp_aux_reset(dp);
 			usleep_range(100, 200);
 			dw_dp_aux_init(dp);

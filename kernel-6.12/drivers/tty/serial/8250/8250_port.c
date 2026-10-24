@@ -51,6 +51,12 @@
 #define DEBUG_AUTOCONF(fmt...)	do { } while (0)
 #endif
 
+#if 0
+#define DEBUG_EM485(fmt...)	printk(fmt)
+#else
+#define DEBUG_EM485(fmt...)	do { } while (0)
+#endif
+
 /*
  * Here we define the default xmit fifo size used for each type of UART.
  */
@@ -1812,6 +1818,11 @@ void serial8250_tx_chars(struct uart_8250_port *up)
 	struct uart_port *port = &up->port;
 	struct tty_port *tport = &port->state->port;
 	int count;
+	int value = 0;
+	int i = 0;
+	u16 lsr;
+
+	DEBUG_EM485("%s\n", __func__);
 
 	if (port->x_char) {
 		uart_xchar_out(port, UART_TX);
@@ -1824,6 +1835,12 @@ void serial8250_tx_chars(struct uart_8250_port *up)
 	if (kfifo_is_empty(&tport->xmit_fifo)) {
 		__stop_tx(up);
 		return;
+	}
+
+	if (port->rs485_de_gpio) {
+		value = 1;
+		gpiod_set_value(port->rs485_de_gpio, value);
+		DEBUG_EM485("%s ttyS%d gpio:%d\n", __func__, up->port.line, value);
 	}
 
 	count = up->tx_loadsz;
@@ -1865,8 +1882,25 @@ void serial8250_tx_chars(struct uart_8250_port *up)
 	 * the interrupt and RPM in __stop_tx()
 	 */
 	if (kfifo_is_empty(&tport->xmit_fifo) &&
-	    !(up->capabilities & UART_CAP_RPM))
+	    !(up->capabilities & UART_CAP_RPM)) {
 		__stop_tx(up);
+		if (port->rs485_de_gpio) {
+			for (i = 0; i < 5000; i++) {
+				udelay(10);
+				lsr = serial_in(up, UART_LSR);
+				if (UART_LSR_TEMT == (lsr & UART_LSR_TEMT)) {
+					DEBUG_EM485("%s [%d] wait finished: %d, lsr: %d\n",
+						    __func__, i,
+						    (lsr & UART_LSR_TEMT) == UART_LSR_TEMT, lsr);
+					break;
+				}
+			}
+
+			value = 0;
+			gpiod_set_value(port->rs485_de_gpio, value);
+			DEBUG_EM485("%s ttyS%d gpio:%d\n", __func__, up->port.line, value);
+		}
+	}
 }
 EXPORT_SYMBOL_GPL(serial8250_tx_chars);
 

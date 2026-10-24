@@ -60,6 +60,10 @@ properties:
       the active state enables RX during TX.
     maxItems: 1
 
+  rs485-de-gpios:
+    description: if using other gpio instead of rts, set this gpio.
+    maxItems: 1
+
 additionalProperties: true
 
 ...
